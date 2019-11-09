@@ -4,6 +4,7 @@ import base64
 import argparse
 import coloredlogs, logging
 import os
+from symetric_encript import randomPassword, encriptText
 
 logger = logging.getLogger('root')
 
@@ -29,6 +30,7 @@ class ClientProtocol(asyncio.Protocol):
         self.loop = loop
         self.state = STATE_CONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
+        self.key = None
 
     def connection_made(self, transport) -> None:
         """
@@ -60,6 +62,11 @@ class ClientProtocol(asyncio.Protocol):
             self.buffer += data.decode()
         except:
             logger.exception('Could not decode data from client')
+
+        if not self.key:
+            print("KEEEY", self.key)
+            self.send_key()
+            return
 
         idx = self.buffer.find('\r\n')
 
@@ -133,16 +140,24 @@ class ClientProtocol(asyncio.Protocol):
             message = {'type': 'DATA', 'data': None}
             read_size = 16 * 60
             while True:
-                data = f.read(16 * 60)
+                p_text = f.read(16 * 60)
+                data = encriptText(key = self.key.encode('ascii'), text = p_text)
                 message['data'] = base64.b64encode(data).decode()
                 self._send(message)
-
-                if len(data) != read_size:
+                print("DataLen, ",len(data))
+                    
+                if len(p_text) != read_size:
+                    print(len(p_text))
                     break
 
             self._send({'type': 'CLOSE'})
             logger.info("File transferred. Closing transport")
             self.transport.close()
+
+    def send_key(self):
+        self.key = randomPassword(16)
+        message = {'type': 'KEY', 'key': self.key}
+        self._send(message)
 
     def _send(self, message: str) -> None:
         """
@@ -154,7 +169,6 @@ class ClientProtocol(asyncio.Protocol):
 
         message_b = (json.dumps(message) + '\r\n').encode()
         self.transport.write(message_b)
-
 
 def main():
     parser = argparse.ArgumentParser(description='Sends files to servers.')

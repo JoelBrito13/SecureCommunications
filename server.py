@@ -6,6 +6,7 @@ import coloredlogs, logging
 import re
 import os
 from aio_tcpserver import tcp_server
+from symetric_encript import decriptText
 
 logger = logging.getLogger('root')
 
@@ -30,6 +31,9 @@ class ClientHandler(asyncio.Protocol):
 		self.storage_dir = storage_dir
 		self.buffer = ''
 		self.peername = ''
+		self.aes_key = ''
+		self.public_key = ''
+		self.private_key = ''
 
 	def connection_made(self, transport) -> None:
 		"""
@@ -80,19 +84,20 @@ class ClientHandler(asyncio.Protocol):
 		:param frame: The JSON object to process
 		:return:
 		"""
-		#logger.debug("Frame: {}".format(frame))
 
+		logger.info("Frame: {}".format(frame))
 		try:
 			message = json.loads(frame)
 		except:
 			logger.exception("Could not decode JSON message: {}".format(frame))
 			self.transport.close()
 			return
-
 		mtype = message.get('type', "").upper()
 
 		if mtype == 'OPEN':
 			ret = self.process_open(message)
+		elif mtype == 'KEY':
+			ret = self.process_key(message)
 		elif mtype == 'DATA':
 			ret = self.process_data(message)
 		elif mtype == 'CLOSE':
@@ -100,7 +105,6 @@ class ClientHandler(asyncio.Protocol):
 		else:
 			logger.warning("Invalid message type: {}".format(message['type']))
 			ret = False
-
 		if not ret:
 			try:
 				self._send({'type': 'ERROR', 'message': 'See server'})
@@ -187,7 +191,8 @@ class ClientHandler(asyncio.Protocol):
 				logger.debug("Invalid message. No data found")
 				return False
 
-			bdata = base64.b64decode(message['data'])
+			c_text = base64.b64decode(message['data'])
+			bdata = decriptText(key = self.aes_key, cryptogram = c_text)
 		except:
 			logger.exception("Could not decode base64 content from message.data")
 			return False
@@ -199,6 +204,45 @@ class ClientHandler(asyncio.Protocol):
 			logger.exception("Could not write to file")
 			return False
 
+		return True
+
+
+	def process_key(self, message: str) -> bool:
+		"""
+		Processes a DATA message from the client
+		This message should contain a chunk of the file
+
+		:param message: The message to process
+		:return: Boolean indicating the success of the operation
+		"""
+		logger.info("Process Key: {}".format(message))
+
+		if self.state == STATE_OPEN:
+			self.state = STATE_DATA
+			# First Packet
+
+		elif self.state == STATE_DATA:
+			# Next packets
+			pass
+
+		else:
+			logger.warning("Invalid state. Discarding")
+			return False
+
+		try:
+			data = message.get('key', None)
+			if data is None:
+				logger.debug("Invalid message. No data found")
+				return False
+
+			self.aes_key = message['key'].encode('ascii')
+			print("New Key: ", self.aes_key)
+		except:
+			logger.exception("Could not decode base64 content from" + message['key'])
+			return False
+
+
+		self._send({'type': 'OK'})
 		return True
 
 

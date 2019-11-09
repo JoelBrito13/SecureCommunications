@@ -1,6 +1,8 @@
 import os
 import getpass
 import base64
+import string
+import random
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -19,7 +21,7 @@ def deriveKey(password):
 	key = kdf.derive(password)
 	return salt,key
 
-def encriptText(key,algorithm,text):
+def encriptText(key, text, algorithm = 'AES'):
 	backend = default_backend()
 	if algorithm == "AES":
 		algo=algorithms.AES(key)
@@ -40,7 +42,7 @@ def encriptText(key,algorithm,text):
 	ct = encryptor.update(text) + encryptor.finalize()
 	return ct
 
-def decriptText(key,algorithm,cryptogram):
+def decriptText(key, cryptogram, algorithm = 'AES'):
 	backend = default_backend()
 	if algorithm == "AES":
 		algo=algorithms.AES(key)
@@ -84,11 +86,19 @@ def decriptFile(key,algorithm,fileIn,fileOut):
 	fout.close()
 	f.close()
 
-#password = getpass.getpass("Password: ")
-#salt,key=deriveKey(bytes(password,"utf-8"))
-#print("Password {} Salt {} Key {}\n".format(password,salt,key))
+def generateKey(pass_len = 16):
+	password = randomPassword(pass_len)
+	salt, key = deriveKey(bytes(password,"utf-8"))
+	return key
+
+def randomPassword(pass_len):
+	letters = string.ascii_letters + string.digits + string.punctuation
+	return ''.join(random.choice(letters) for letter in range(pass_len)) 
+
+#key = generateKey()
+#print("Key {}\n".format(key))
 #text = input("Text: ").encode("utf-8")
-#crypto=encriptText(key,"AES",text)
-#print("Cryptogram: {}".format(base64.b64encode(crypto)))
-#text_d=decriptText(key,"AES",crypto)
+#crypto=encriptText(key,text)
+#print("Cryptogram: {}".format(crypto))
+#text_d=decriptText(key,crypto)
 #print("Decrypt: {}".format(text_d))
