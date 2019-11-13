@@ -1,6 +1,8 @@
 import asyncio
 import json
+import sys
 import base64
+import pickle 
 import argparse
 import coloredlogs, logging
 import re
@@ -29,7 +31,7 @@ class ClientHandler(asyncio.Protocol):
 		self.file_name = None
 		self.file_path = None
 		self.storage_dir = storage_dir
-		self.buffer = ''
+		self.buffer = 0
 		self.peername = ''
 		self.aes_key = ''
 		self.public_key = ''
@@ -56,28 +58,24 @@ class ClientHandler(asyncio.Protocol):
         :param data: The data that was received. This may not be a complete JSON message
         :return:
         """
-		logger.debug('Received: {}'.format(data))
+		logger.info('Received: {}'.format(data))
 		try:
-			self.buffer += data.decode()
+			message = pickle.loads(data)
+			self.buffer += sys.getsizeof(message)
 		except:
-			logger.exception('Could not decode data from client')
+			logger.exception("Could not decode JSON message: {}".format(message))
+			self.transport.close()
+			return
 
-		idx = self.buffer.find('\r\n')
-
-		while idx >= 0:  # While there are separators
-			frame = self.buffer[:idx + 2].strip()  # Extract the JSON object
-			self.buffer = self.buffer[idx + 2:]  # Removes the JSON object from the buffer
-
-			self.on_frame(frame)  # Process the frame
-			idx = self.buffer.find('\r\n')
-
-		if len(self.buffer) > 4096 * 1024 * 1024:  # If buffer is larger than 4M
+		self.on_frame(message)  # Process the frame
+		
+		if self.buffer > 4096 * 1024 * 1024:  # If buffer is larger than 4M
 			logger.warning('Buffer to large')
-			self.buffer = ''
+			self.buffer = 0
 			self.transport.close()
 
 
-	def on_frame(self, frame: str) -> None:
+	def on_frame(self, message: str) -> None:
 		"""
 		Called when a frame (JSON Object) is extracted
 
@@ -85,14 +83,7 @@ class ClientHandler(asyncio.Protocol):
 		:return:
 		"""
 
-		logger.info("Frame: {}".format(frame))
-		try:
-			message = json.loads(frame)
-		except:
-			logger.exception("Could not decode JSON message: {}".format(frame))
-			self.transport.close()
-			return
-		mtype = message.get('type', "").upper()
+		mtype = message['type'].upper()
 
 		if mtype == 'OPEN':
 			ret = self.process_open(message)
@@ -186,12 +177,12 @@ class ClientHandler(asyncio.Protocol):
 			return False
 
 		try:
-			data = message.get('data', None)
+			data = message['data']
 			if data is None:
 				logger.debug("Invalid message. No data found")
 				return False
 
-			c_text = base64.b64decode(message['data'])
+			c_text = message['data']
 			bdata = decriptText(key = self.aes_key, cryptogram = c_text)
 		except:
 			logger.exception("Could not decode base64 content from message.data")
@@ -230,12 +221,12 @@ class ClientHandler(asyncio.Protocol):
 			return False
 
 		try:
-			data = message.get('key', None)
+			data = message['key']
 			if data is None:
 				logger.debug("Invalid message. No data found")
 				return False
 
-			self.aes_key = message['key'].encode('ascii')
+			self.aes_key = message['key']
 			print("New Key: ", self.aes_key)
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
@@ -274,7 +265,7 @@ class ClientHandler(asyncio.Protocol):
 		"""
 		logger.debug("Send: {}".format(message))
 
-		message_b = (json.dumps(message) + '\r\n').encode()
+		message_b = pickle.dumps(message)
 		self.transport.write(message_b)
 
 def main():

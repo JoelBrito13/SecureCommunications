@@ -1,10 +1,12 @@
+import sys
 import asyncio
 import json
+import pickle 
 import base64
 import argparse
 import coloredlogs, logging
 import os
-from symetric_encript import randomPassword, encriptText
+from symetric_encript import randomPassword, encriptText, generateKey
 
 logger = logging.getLogger('root')
 
@@ -29,7 +31,7 @@ class ClientProtocol(asyncio.Protocol):
         self.file_name = file_name
         self.loop = loop
         self.state = STATE_CONNECT  # Initial State
-        self.buffer = ''  # Buffer to receive data chunks
+        self.buffer = 0  # Buffer to receive data chunks
         self.key = None
 
     def connection_made(self, transport) -> None:
@@ -59,30 +61,27 @@ class ClientProtocol(asyncio.Protocol):
         """
         logger.debug('Received: {}'.format(data))
         try:
-            self.buffer += data.decode()
+            message = pickle.loads(data)
+            self.buffer += sys.getsizeof(data)
         except:
-            logger.exception('Could not decode data from client')
+            logger.exception("Could not decode the message")
+            self.transport.close()
+            return
+
 
         if not self.key:
             print("KEEEY", self.key)
             self.send_key()
             return
 
-        idx = self.buffer.find('\r\n')
+        self.on_frame(message)
 
-        while idx >= 0:  # While there are separators
-            frame = self.buffer[:idx + 2].strip()  # Extract the JSON object
-            self.buffer = self.buffer[idx + 2:]  # Removes the JSON object from the buffer
-
-            self.on_frame(frame)  # Process the frame
-            idx = self.buffer.find('\r\n')
-
-        if len(self.buffer) > 4096 * 1024 * 1024:  # If buffer is larger than 4M
+        if self.buffer > 4096 * 1024 * 1024:  # If buffer is larger than 4M
             logger.warning('Buffer to large')
-            self.buffer = ''
+            self.buffer = 0
             self.transport.close()
 
-    def on_frame(self, frame: str) -> None:
+    def on_frame(self, message: str) -> None:
         """
         Processes a frame (JSON Object)
 
@@ -91,14 +90,9 @@ class ClientProtocol(asyncio.Protocol):
         """
 
         #logger.debug("Frame: {}".format(frame))
-        try:
-            message = json.loads(frame)
-        except:
-            logger.exception("Could not decode the JSON message")
-            self.transport.close()
-            return
 
-        mtype = message.get('type', None)
+
+        mtype = message['type']
 
         if mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
@@ -112,7 +106,7 @@ class ClientProtocol(asyncio.Protocol):
             return
 
         elif mtype == 'ERROR':
-            logger.warning("Got error from server: {}".format(message.get('data', None)))
+            logger.warning("Got error from server: {}".format(message['data']))
         else:
             logger.warning("Invalid message type")
 
@@ -141,10 +135,11 @@ class ClientProtocol(asyncio.Protocol):
             read_size = 16 * 60
             while True:
                 p_text = f.read(16 * 60)
-                data = encriptText(key = self.key.encode('ascii'), text = p_text)
-                message['data'] = base64.b64encode(data).decode()
-                self._send(message)
+                print("SelfKey", self.key, " text", p_text)
+                data = encriptText(key = self.key, text = p_text)
+                message['data'] = data
                 print("DataLen, ",len(data))
+                self._send(message)
                     
                 if len(p_text) != read_size:
                     print(len(p_text))
@@ -155,7 +150,7 @@ class ClientProtocol(asyncio.Protocol):
             self.transport.close()
 
     def send_key(self):
-        self.key = randomPassword(16)
+        self.key = generateKey()
         message = {'type': 'KEY', 'key': self.key}
         self._send(message)
 
@@ -166,8 +161,8 @@ class ClientProtocol(asyncio.Protocol):
         :return:
         """
         logger.debug("Send: {}".format(message))
-
-        message_b = (json.dumps(message) + '\r\n').encode()
+        print(message)
+        message_b = pickle.dumps(message)
         self.transport.write(message_b)
 
 def main():
