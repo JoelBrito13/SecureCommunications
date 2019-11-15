@@ -9,7 +9,6 @@ import re
 import os
 from aio_tcpserver import tcp_server
 from symetric_encript import decriptText
-from asymetric_encript import rsa_key, rsa_encrypt, rsa_decrypt
 
 logger = logging.getLogger('root')
 
@@ -34,13 +33,13 @@ class ClientHandler(asyncio.Protocol):
 		self.storage_dir = storage_dir
 		self.buffer = 0
 		self.peername = ''
-		self.aes_key = '' 
-		self.private_key, self.public_key = rsa_key()
+		self.aes_key = ''
+		self.public_key = ''
+		self.private_key = ''
 
 	def connection_made(self, transport) -> None:
 		"""
 		Called when a client connects
-
 		:param transport: The transport stream to use with this client
 		:return:
 		"""
@@ -54,7 +53,6 @@ class ClientHandler(asyncio.Protocol):
 		"""
         Called when data is received from the client.
         Stores the data in the buffer
-
         :param data: The data that was received. This may not be a complete JSON message
         :return:
         """
@@ -78,18 +76,13 @@ class ClientHandler(asyncio.Protocol):
 	def on_frame(self, message: str) -> None:
 		"""
 		Called when a frame (JSON Object) is extracted
-
 		:param frame: The JSON object to process
 		:return:
 		"""
 
 		mtype = message['type'].upper()
 
-		if mtype == 'START':
-			message = {'type':'KEY', 'key':self.public_key}
-			self._send(message)
-
-		elif mtype == 'OPEN':
+		if mtype == 'OPEN':
 			ret = self.process_open(message)
 		elif mtype == 'KEY':
 			ret = self.process_key(message)
@@ -119,7 +112,6 @@ class ClientHandler(asyncio.Protocol):
 		"""
 		Processes an OPEN message from the client
 		This message should contain the filename
-
 		:param message: The message to process
 		:return: Boolean indicating the success of the operation
 		"""
@@ -162,7 +154,6 @@ class ClientHandler(asyncio.Protocol):
 		"""
 		Processes a DATA message from the client
 		This message should contain a chunk of the file
-
 		:param message: The message to process
 		:return: Boolean indicating the success of the operation
 		"""
@@ -206,11 +197,22 @@ class ClientHandler(asyncio.Protocol):
 		"""
 		Processes a DATA message from the client
 		This message should contain a chunk of the file
-
 		:param message: The message to process
 		:return: Boolean indicating the success of the operation
 		"""
 		logger.info("Process Key: {}".format(message))
+
+		if self.state == STATE_OPEN:
+			self.state = STATE_DATA
+			# First Packet
+
+		elif self.state == STATE_DATA:
+			# Next packets
+			pass
+
+		else:
+			logger.warning("Invalid state. Discarding")
+			return False
 
 		try:
 			data = message['key']
@@ -218,7 +220,7 @@ class ClientHandler(asyncio.Protocol):
 				logger.debug("Invalid message. No data found")
 				return False
 
-			self.aes_key = rsa_decrypt(private_key, data)
+			self.aes_key = message['key']
 			print("New Key: ", self.aes_key)
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
@@ -233,7 +235,6 @@ class ClientHandler(asyncio.Protocol):
 		"""
 		Processes a CLOSE message from the client.
 		This message will trigger the termination of this session
-
 		:param message: The message to process
 		:return: Boolean indicating the success of the operation
 		"""
@@ -247,6 +248,7 @@ class ClientHandler(asyncio.Protocol):
 		self.state = STATE_CLOSE
 
 		return True
+
 
 	def _send(self, message: str) -> None:
 		"""
@@ -295,5 +297,3 @@ def main():
 
 if __name__ == '__main__':
 	main()
-
-

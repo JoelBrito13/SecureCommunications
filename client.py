@@ -7,7 +7,6 @@ import argparse
 import coloredlogs, logging
 import os
 from symetric_encript import randomPassword, encriptText, generateKey
-from asymetric_encript import rsa_key, rsa_encrypt, rsa_decrypt
 
 logger = logging.getLogger('root')
 
@@ -34,12 +33,10 @@ class ClientProtocol(asyncio.Protocol):
         self.state = STATE_CONNECT  # Initial State
         self.buffer = 0  # Buffer to receive data chunks
         self.key = None
-        self.public_key = None
 
     def connection_made(self, transport) -> None:
         """
         Called when the client connects.
-
         :param transport: The transport stream to use for this client
         :return: No return
         """
@@ -47,7 +44,7 @@ class ClientProtocol(asyncio.Protocol):
 
         logger.debug('Connected to Server')
         
-        message = {'type': 'START'}
+        message = {'type': 'OPEN', 'file_name': self.file_name}
         self._send(message)
 
         self.state = STATE_OPEN
@@ -57,7 +54,6 @@ class ClientProtocol(asyncio.Protocol):
         """
         Called when data is received from the server.
         Stores the data in the buffer
-
         :param data: The data that was received. This may not be a complete JSON message
         :return:
         """
@@ -70,6 +66,12 @@ class ClientProtocol(asyncio.Protocol):
             self.transport.close()
             return
 
+
+        if not self.key:
+            print("KEEEY", self.key)
+            self.send_key()
+            return
+
         self.on_frame(message)
 
         if self.buffer > 4096 * 1024 * 1024:  # If buffer is larger than 4M
@@ -80,20 +82,19 @@ class ClientProtocol(asyncio.Protocol):
     def on_frame(self, message: str) -> None:
         """
         Processes a frame (JSON Object)
-
         :param frame: The JSON Object to process
         :return:
         """
 
         #logger.debug("Frame: {}".format(frame))
 
+
         mtype = message['type']
-        if mtype == 'KEY':
-            self.recv_key(message)
-        elif mtype == 'OK':  # Server replied OK. We can advance the state
+
+        if mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
-                self.send_file()
+                self.send_file(self.file_name)
             elif self.state == STATE_DATA:  # Got an OK during a message transfer.
                 # Reserved for future use
                 pass
@@ -118,21 +119,20 @@ class ClientProtocol(asyncio.Protocol):
         logger.info('The server closed the connection')
         self.loop.stop()
 
-    def send_file(self, ) -> None:
+    def send_file(self, file_name: str) -> None:
         """
         Sends a file to the server.
         The file is read in chunks, encoded to Base64 and sent as part of a DATA JSON message
         :param file_name: File to send
         :return:  None
-        """        
-        message = {'type': 'OPEN', 'file_name': self.file_name}
-        self._send(message)
-        print("SelfKey", self.key, " text", p_text)
-        with open(self.file_name, 'rb') as f:
+        """
+
+        with open(file_name, 'rb') as f:
             message = {'type': 'DATA', 'data': None}
             read_size = 16 * 60
             while True:
                 p_text = f.read(16 * 60)
+                print("SelfKey", self.key, " text", p_text)
                 data = encriptText(key = self.key, text = p_text)
                 message['data'] = data
                 print("DataLen, ",len(data))
@@ -146,14 +146,9 @@ class ClientProtocol(asyncio.Protocol):
             logger.info("File transferred. Closing transport")
             self.transport.close()
 
-    def recv_key(self,message):
-        self.public_key = message['key']
-        self.send_key()
-
     def send_key(self):
         self.key = generateKey()
-        cypher_key = rsa_encrypt(self.public_key, self.key)
-        message = {'type': 'KEY', 'key': cypher_key}
+        message = {'type': 'KEY', 'key': self.key}
         self._send(message)
 
     def _send(self, message: str) -> None:
