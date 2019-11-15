@@ -9,6 +9,7 @@ import re
 import os
 from aio_tcpserver import tcp_server
 from symetric_encript import decriptText
+from asymetric_encript import rsa_key, rsa_encrypt, rsa_decrypt
 
 logger = logging.getLogger('root')
 
@@ -33,9 +34,8 @@ class ClientHandler(asyncio.Protocol):
 		self.storage_dir = storage_dir
 		self.buffer = 0
 		self.peername = ''
-		self.aes_key = ''
-		self.public_key = ''
-		self.private_key = ''
+		self.aes_key = '' 
+		self.private_key, self.public_key = rsa_key()
 
 	def connection_made(self, transport) -> None:
 		"""
@@ -85,7 +85,11 @@ class ClientHandler(asyncio.Protocol):
 
 		mtype = message['type'].upper()
 
-		if mtype == 'OPEN':
+		if mtype == 'START':
+			message = {'type':'KEY', 'key':self.public_key}
+			self._send(message)
+
+		elif mtype == 'OPEN':
 			ret = self.process_open(message)
 		elif mtype == 'KEY':
 			ret = self.process_key(message)
@@ -208,25 +212,13 @@ class ClientHandler(asyncio.Protocol):
 		"""
 		logger.info("Process Key: {}".format(message))
 
-		if self.state == STATE_OPEN:
-			self.state = STATE_DATA
-			# First Packet
-
-		elif self.state == STATE_DATA:
-			# Next packets
-			pass
-
-		else:
-			logger.warning("Invalid state. Discarding")
-			return False
-
 		try:
 			data = message['key']
 			if data is None:
 				logger.debug("Invalid message. No data found")
 				return False
 
-			self.aes_key = message['key']
+			self.aes_key = rsa_decrypt(private_key, data)
 			print("New Key: ", self.aes_key)
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
@@ -255,7 +247,6 @@ class ClientHandler(asyncio.Protocol):
 		self.state = STATE_CLOSE
 
 		return True
-
 
 	def _send(self, message: str) -> None:
 		"""

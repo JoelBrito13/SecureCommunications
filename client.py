@@ -7,6 +7,7 @@ import argparse
 import coloredlogs, logging
 import os
 from symetric_encript import randomPassword, encriptText, generateKey
+from asymetric_encript import rsa_key, rsa_encrypt, rsa_decrypt
 
 logger = logging.getLogger('root')
 
@@ -33,6 +34,7 @@ class ClientProtocol(asyncio.Protocol):
         self.state = STATE_CONNECT  # Initial State
         self.buffer = 0  # Buffer to receive data chunks
         self.key = None
+        self.public_key = None
 
     def connection_made(self, transport) -> None:
         """
@@ -45,7 +47,7 @@ class ClientProtocol(asyncio.Protocol):
 
         logger.debug('Connected to Server')
         
-        message = {'type': 'OPEN', 'file_name': self.file_name}
+        message = {'type': 'START'}
         self._send(message)
 
         self.state = STATE_OPEN
@@ -68,12 +70,6 @@ class ClientProtocol(asyncio.Protocol):
             self.transport.close()
             return
 
-
-        if not self.key:
-            print("KEEEY", self.key)
-            self.send_key()
-            return
-
         self.on_frame(message)
 
         if self.buffer > 4096 * 1024 * 1024:  # If buffer is larger than 4M
@@ -91,13 +87,13 @@ class ClientProtocol(asyncio.Protocol):
 
         #logger.debug("Frame: {}".format(frame))
 
-
         mtype = message['type']
-
-        if mtype == 'OK':  # Server replied OK. We can advance the state
+        if mtype == 'KEY':
+            self.recv_key(message)
+        elif mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
-                self.send_file(self.file_name)
+                self.send_file()
             elif self.state == STATE_DATA:  # Got an OK during a message transfer.
                 # Reserved for future use
                 pass
@@ -122,20 +118,21 @@ class ClientProtocol(asyncio.Protocol):
         logger.info('The server closed the connection')
         self.loop.stop()
 
-    def send_file(self, file_name: str) -> None:
+    def send_file(self, ) -> None:
         """
         Sends a file to the server.
         The file is read in chunks, encoded to Base64 and sent as part of a DATA JSON message
         :param file_name: File to send
         :return:  None
-        """
-
-        with open(file_name, 'rb') as f:
+        """        
+        message = {'type': 'OPEN', 'file_name': self.file_name}
+        self._send(message)
+        print("SelfKey", self.key, " text", p_text)
+        with open(self.file_name, 'rb') as f:
             message = {'type': 'DATA', 'data': None}
             read_size = 16 * 60
             while True:
                 p_text = f.read(16 * 60)
-                print("SelfKey", self.key, " text", p_text)
                 data = encriptText(key = self.key, text = p_text)
                 message['data'] = data
                 print("DataLen, ",len(data))
@@ -149,9 +146,14 @@ class ClientProtocol(asyncio.Protocol):
             logger.info("File transferred. Closing transport")
             self.transport.close()
 
+    def recv_key(self,message):
+        self.public_key = message['key']
+        self.send_key()
+
     def send_key(self):
         self.key = generateKey()
-        message = {'type': 'KEY', 'key': self.key}
+        cypher_key = rsa_encrypt(self.public_key, self.key)
+        message = {'type': 'KEY', 'key': cypher_key}
         self._send(message)
 
     def _send(self, message: str) -> None:
