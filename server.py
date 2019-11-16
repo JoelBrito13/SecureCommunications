@@ -2,7 +2,6 @@ import asyncio
 import json
 import sys
 import base64
-import pickle 
 import argparse
 import coloredlogs, logging
 import re
@@ -31,7 +30,7 @@ class ClientHandler(asyncio.Protocol):
 		self.file_name = None
 		self.file_path = None
 		self.storage_dir = storage_dir
-		self.buffer = 0
+		self.buffer = ''
 		self.peername = ''
 		self.aes_key = ''
 		self.dh_private = ''
@@ -56,20 +55,24 @@ class ClientHandler(asyncio.Protocol):
         :param data: The data that was received. This may not be a complete JSON message
         :return:
         """
-		logger.info('Received: {}'.format(data))
+		logger.debug('Received: {}'.format(data))
 		try:
-			message = pickle.loads(data)
-			self.buffer += sys.getsizeof(message)
+			self.buffer += data.decode()
 		except:
-			logger.exception("Could not decode JSON message: {}".format(message))
-			self.transport.close()
-			return
+			logger.exception('Could not decode data from client')
 
-		self.on_frame(message)  # Process the frame
-		
-		if self.buffer > 4096 * 1024 * 1024:  # If buffer is larger than 4M
+		idx = self.buffer.find('\r\n')
+
+		while idx >= 0:  # While there are separators
+			frame = self.buffer[:idx + 2].strip()  # Extract the JSON object
+			self.buffer = self.buffer[idx + 2:]  # Removes the JSON object from the buffer
+
+			self.on_frame(frame)  # Process the frame
+			idx = self.buffer.find('\r\n')
+
+		if len(self.buffer) > 4096 * 1024 * 1024:  # If buffer is larger than 4M
 			logger.warning('Buffer to large')
-			self.buffer = 0
+			self.buffer = ''
 			self.transport.close()
 
 
@@ -79,6 +82,12 @@ class ClientHandler(asyncio.Protocol):
 		:param frame: The JSON object to process
 		:return:
 		"""
+		try:
+			message = json.loads(frame)
+		except:
+			logger.exception("Could not decode JSON message: {}".format(frame))
+			self.transport.close()
+			return
 
 		mtype = message['type'].upper()
 
@@ -299,7 +308,7 @@ class ClientHandler(asyncio.Protocol):
 		"""
 		logger.debug("Send: {}".format(message))
 
-		message_b = pickle.dumps(message)
+		message_b = json.dumps(message)
 		self.transport.write(message_b)
 
 def main():

@@ -6,7 +6,7 @@ import base64
 import argparse
 import coloredlogs, logging
 import os
-from symetric_encript import *
+from symetric_encript import generateKey, encryptAesSalsa20, decryptAesSalsa20
 
 logger = logging.getLogger('root')
 
@@ -31,10 +31,12 @@ class ClientProtocol(asyncio.Protocol):
         self.file_name = file_name
         self.loop = loop
         self.state = STATE_CONNECT  # Initial State
-        self.buffer = 0  # Buffer to receive data chunks
-        self.key = None
+        self.buffer = ''  # Buffer to receive data chunks
         self.secret= ''
         self.dh_private = ''
+        self.aes_key = generateKey(32)
+		self.salsa_key = generateKey(32)
+		self.initial_vector = os.urandom(16)
 
     def connection_made(self, transport) -> None:
         """
@@ -61,18 +63,22 @@ class ClientProtocol(asyncio.Protocol):
         """
         logger.debug('Received: {}'.format(data))
         try:
-            message = pickle.loads(data)
-            self.buffer += sys.getsizeof(data)
+            self.buffer += data.decode()
         except:
-            logger.exception("Could not decode the message")
-            self.transport.close()
-            return
+            logger.exception('Could not decode data from client')
 
-        self.on_frame(message)
+        idx = self.buffer.find('\r\n')
 
-        if self.buffer > 4096 * 1024 * 1024:  # If buffer is larger than 4M
-            logger.warning('Buffer too large')
-            self.buffer = 0
+        while idx >= 0:  # While there are separators
+            frame = self.buffer[:idx + 2].strip()  # Extract the JSON object
+            self.buffer = self.buffer[idx + 2:]  # Removes the JSON object from the buffer
+
+            self.on_frame(frame)  # Process the frame
+            idx = self.buffer.find('\r\n')
+
+        if len(self.buffer) > 4096 * 1024 * 1024:  # If buffer is larger than 4M
+            logger.warning('Buffer to large')
+            self.buffer = ''
             self.transport.close()
 
     def on_frame(self, message: str) -> None:
@@ -82,7 +88,15 @@ class ClientProtocol(asyncio.Protocol):
         :return:
         """
 
-        #logger.debug("Frame: {}".format(frame))
+        logger.debug("Frame: {}".format(frame))
+		try:
+            message = json.loads(frame)
+        except:
+            logger.exception("Could not decode the JSON message")
+            self.transport.close()
+            return
+
+        mtype = message.get('type', None)
 
 
         mtype = message['type']
@@ -132,9 +146,9 @@ class ClientProtocol(asyncio.Protocol):
             while True:
                 p_text = f.read(16 * 60)
                 print("SelfKey", self.key, " text", p_text)
-                data = encriptText(key = self.key, text = p_text)
-                message['data'] = data
-                print("DataLen, ",len(data))
+                data = encryptAesSalsa20(key_aes=self.aes_key, keysalsa=self.salsa_key, text=self.p_text, iv=self.initial_vector)
+     
+                message['data'] = base64.b64encode(data).decode()
                 self._send(message)
                     
                 if len(p_text) != read_size:
@@ -172,7 +186,7 @@ class ClientProtocol(asyncio.Protocol):
         """
         logger.debug("Send: {}".format(message))
         print(message)
-        message_b = pickle.dumps(message)
+        message_b = json.dumps(message)
         self.transport.write(message_b)
 
 def main():

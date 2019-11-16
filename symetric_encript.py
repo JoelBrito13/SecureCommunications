@@ -38,9 +38,8 @@ def dh_derive(key):
     										AES Session 
     """
 									
-def encriptText(key, text, algorithm):
+def encriptText(key, text, algorithm, iv):
 	backend = default_backend()
-	iv = os.urandom(16)
 	if algorithm == "AES":
 		algo=algorithms.AES(key)
 	else:
@@ -54,7 +53,7 @@ def encriptText(key, text, algorithm):
 	cipher = Cipher(algo, modes.CBC(iv), backend=backend)
 	encryptor = cipher.encryptor()
 	ct = encryptor.update(text) + encryptor.finalize()
-	return ct,iv
+	return ct
 
 def decriptText(key, cryptogram, algorithm, iv):
 	backend = default_backend()
@@ -117,12 +116,12 @@ def decryptTextSalsa20(key, ciphertext):
     										Algorithms Combination Session 
     """
 									
-def encryptAesSalsa20(key_aes, keysalsa, text):
-	aes_cipher, iv = encriptText(key = key_aes, text=text, algorithm="AES")
+def encryptAesSalsa20(key_aes, keysalsa, text, iv):
+	aes_cipher = encriptText(key = key_aes, text=text, algorithm="AES", iv=iv)
 	salsa_cipher = encryptTextSalsa20(key=keysalsa, text=aes_cipher)
-	return salsa_cipher, iv
+	return salsa_cipher
 
-def decryptAesSalsa20(key_aes, keysalsa, cipher, iv=None):
+def decryptAesSalsa20(key_aes, keysalsa, cipher, iv):
 	sansa_text = decryptTextSalsa20(key=keysalsa, ciphertext=cipher)
 	aes_text = decriptText(key=key_aes, cryptogram=sansa_text, algorithm="AES", iv=iv)
 	return aes_text

@@ -50,7 +50,9 @@ print(message)
 text = "Python random text to encryptor".encode('ascii'	)
 print(text)
 
-crypto, iv = encryptAesSalsa20(key1, key2,text)
+iv = os.urandom(16)
+crypto = encryptAesSalsa20(key1, key2,text, iv)
+
 
 print("Cryptogram: {}\niv: {}".format(crypto, iv))
 
@@ -64,7 +66,14 @@ except:
 	print("Could not encode key1")
 
 try:
-	print(base64.b64encode(message).decode())
+	msg=base64.b64encode(crypto).decode()
+	print("msg",msg)
+	message = {"type":"DATA","data":msg}
+	print("message", message)
+	message_b=(json.dumps(message) + '\r\n').encode()
+	print("message_b", message_b)
+	print(base64.b64encode(message_b).decode())
+
 except:
 	print("Could not encode message")
 
