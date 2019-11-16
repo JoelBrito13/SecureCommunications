@@ -6,7 +6,7 @@ import random
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes,hmac
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat,PrivateFormat,ParameterFormat, load_pem_public_key, load_pem_parameters
@@ -25,6 +25,7 @@ def deriveKey(password):
 	return salt,key
 
 def dh_derive(key):
+	# Change "length" based on algorithm
 	return HKDF(algorithm=hashes.SHA256(),
 				length=32,
 				salt=None,
@@ -99,11 +100,13 @@ def randomPassword(pass_len):
 	return ''.join(random.choice(letters) for letter in range(pass_len)) 
 
 def dh_parameters():
-	parameters = dh.generate_parameters(generator=2, key_size=1024,
+	print("Generating Parameters")
+	parameters = dh.generate_parameters(generator=2, key_size=512,
 		backend=default_backend())
 	return parameters
 
 def dh_private(parameters):
+	print("Generating Private Key")
 	return parameters.generate_private_key()
 
 def load_pem(bmessage):
@@ -111,3 +114,15 @@ def load_pem(bmessage):
 
 def load_params(bmessage):
 	return load_pem_parameters(bmessage,backend=default_backend())
+
+def get_mac(key,message,algorithm):
+	backend = default_backend()
+	if algorithm == "SHA256":
+		algo=hashes.SHA256()
+	elif algorithm == "SHA512":
+		algo=hashes.SHA512()
+	else:
+		raise(Exception("Invalid Algorithm"))
+	mac=hmac.HMAC(key,algo,backend)
+	mac.update(message)
+	return mac.finalize()
