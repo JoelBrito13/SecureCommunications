@@ -8,7 +8,7 @@ import coloredlogs, logging
 import re
 import os
 from aio_tcpserver import tcp_server
-from symetric_encript import decriptText
+from symetric_encript import *
 
 logger = logging.getLogger('root')
 
@@ -34,8 +34,8 @@ class ClientHandler(asyncio.Protocol):
 		self.buffer = 0
 		self.peername = ''
 		self.aes_key = ''
-		self.public_key = ''
-		self.private_key = ''
+		self.dh_private = ''
+		self.secret = ''
 
 	def connection_made(self, transport) -> None:
 		"""
@@ -86,6 +86,8 @@ class ClientHandler(asyncio.Protocol):
 			ret = self.process_open(message)
 		elif mtype == 'KEY':
 			ret = self.process_key(message)
+		elif mtype == 'DH':
+			ret = self.process_dh(message)
 		elif mtype == 'DATA':
 			ret = self.process_data(message)
 		elif mtype == 'CLOSE':
@@ -195,10 +197,7 @@ class ClientHandler(asyncio.Protocol):
 
 	def process_key(self, message: str) -> bool:
 		"""
-		Processes a DATA message from the client
-		This message should contain a chunk of the file
-		:param message: The message to process
-		:return: Boolean indicating the success of the operation
+		KEY EXCHANGE
 		"""
 		logger.info("Process Key: {}".format(message))
 
@@ -230,6 +229,48 @@ class ClientHandler(asyncio.Protocol):
 		self._send({'type': 'OK'})
 		return True
 
+	def process_dh(self,message: str) -> bool:
+		logger.info("Diffie Hellman Request: {}".format(message))
+
+		if self.state == STATE_OPEN:
+			self.state = STATE_DATA
+			# First Packet
+
+		elif self.state == STATE_DATA:
+			# Next packets
+			pass
+
+		else:
+			logger.warning("Invalid state. Discarding")
+			return False
+
+		try:
+			data = load_pem(message['key'])
+			params = load_params(message['parameters'])
+			if data is None or params is None:
+				logger.debug("Invalid message. No data found")
+				return False
+			# Get clients public
+			client_public_p = data
+			parameters= params
+			# Generate server private
+			self.dh_private=dh_private(parameters)
+			# Compute secret
+			self.secret=self.dh_private.exchange(client_public_p)
+			print("Deriving")
+			derived_secret=dh_derive(self.secret)
+			print(base64.encodebytes(derived_secret))
+			
+			# Give servers public to client
+
+		except:
+			logger.exception("Could not decode base64 content from" + message['key'])
+			return False
+
+		self._send({
+			'type': 'DH', 'key':self.dh_private.public_key().public_bytes(Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
+			})
+		return True
 
 	def process_close(self, message: str) -> bool:
 		"""

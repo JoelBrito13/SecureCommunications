@@ -7,6 +7,9 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat,PrivateFormat,ParameterFormat, load_pem_public_key, load_pem_parameters
 
 def deriveKey(password):
 	backend=default_backend()
@@ -21,14 +24,18 @@ def deriveKey(password):
 	key = kdf.derive(password)
 	return salt,key
 
+def dh_derive(key):
+	return HKDF(algorithm=hashes.SHA256(),
+				length=32,
+				salt=None,
+				info=b'dh handshake',
+				backend=default_backend()
+	).derive(key)
+
 def encriptText(key, text, algorithm = 'AES'):
 	backend = default_backend()
 	if algorithm == "AES":
 		algo=algorithms.AES(key)
-	elif algorithm == "3DES":
-		algo=algorithms.TripleDES(key)
-	elif algorithm == "ChaCha20":
-		algo=algorithms.ChaCha20(key)
 	else:
 		raise(Exception("Invalid Algorithm"))
 	bs = int(algo.block_size / 8)
@@ -46,10 +53,6 @@ def decriptText(key, cryptogram, algorithm = 'AES'):
 	backend = default_backend()
 	if algorithm == "AES":
 		algo=algorithms.AES(key)
-	elif algorithm == "3DES":
-		algo=algorithms.TripleDES(key)
-	elif algorithm == "ChaCha20":
-		algo=algorithms.ChaCha20(key)
 	else:
 		raise(Exception("Invalid Algorithm"))
 
@@ -95,10 +98,16 @@ def randomPassword(pass_len):
 	letters = string.ascii_letters + string.digits + string.punctuation
 	return ''.join(random.choice(letters) for letter in range(pass_len)) 
 
-#key = generateKey()
-#print("Key {}\n".format(key))
-#text = input("Text: ").encode("utf-8")
-#crypto=encriptText(key,text)
-#print("Cryptogram: {}".format(crypto))
-#text_d=decriptText(key,crypto)
-#print("Decrypt: {}".format(text_d))
+def dh_parameters():
+	parameters = dh.generate_parameters(generator=2, key_size=1024,
+		backend=default_backend())
+	return parameters
+
+def dh_private(parameters):
+	return parameters.generate_private_key()
+
+def load_pem(bmessage):
+	return load_pem_public_key(bmessage,backend=default_backend())
+
+def load_params(bmessage):
+	return load_pem_parameters(bmessage,backend=default_backend())

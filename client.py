@@ -6,7 +6,7 @@ import base64
 import argparse
 import coloredlogs, logging
 import os
-from symetric_encript import randomPassword, encriptText, generateKey
+from symetric_encript import *
 
 logger = logging.getLogger('root')
 
@@ -33,6 +33,8 @@ class ClientProtocol(asyncio.Protocol):
         self.state = STATE_CONNECT  # Initial State
         self.buffer = 0  # Buffer to receive data chunks
         self.key = None
+        self.secret= ''
+        self.dh_private = ''
 
     def connection_made(self, transport) -> None:
         """
@@ -66,16 +68,10 @@ class ClientProtocol(asyncio.Protocol):
             self.transport.close()
             return
 
-
-        if not self.key:
-            print("KEEEY", self.key)
-            self.send_key()
-            return
-
         self.on_frame(message)
 
         if self.buffer > 4096 * 1024 * 1024:  # If buffer is larger than 4M
-            logger.warning('Buffer to large')
+            logger.warning('Buffer too large')
             self.buffer = 0
             self.transport.close()
 
@@ -94,18 +90,21 @@ class ClientProtocol(asyncio.Protocol):
         if mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
-                self.send_file(self.file_name)
+                self.dh_start()
+                #self.send_file(self.file_name)
             elif self.state == STATE_DATA:  # Got an OK during a message transfer.
                 # Reserved for future use
                 pass
             else:
                 logger.warning("Ignoring message from server")
             return
-
         elif mtype == 'ERROR':
             logger.warning("Got error from server: {}".format(message['data']))
+        elif mtype == 'DH':
+            self.dh_finalize(message['key'])
         else:
             logger.warning("Invalid message type")
+
 
         self.transport.close()
         self.loop.stop()
@@ -145,11 +144,25 @@ class ClientProtocol(asyncio.Protocol):
             self._send({'type': 'CLOSE'})
             logger.info("File transferred. Closing transport")
             self.transport.close()
-
-    def send_key(self):
-        self.key = generateKey()
-        message = {'type': 'KEY', 'key': self.key}
+    
+    def dh_start(self):
+        parameters=dh_parameters()
+        self.dh_private=dh_private(parameters)
+        # TODO - change "key" naming
+        message = {
+            'type': 'DH',
+            'parameters': parameters.parameter_bytes(Encoding.PEM,ParameterFormat.PKCS3),
+            'key': self.dh_private.public_key().public_bytes(Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
+            }
         self._send(message)
+
+    def dh_finalize(self,server_key):
+
+        #print(f"Client Private: {base64.encodebytes(self.dh_private.private_bytes(Encoding.PEM,PrivateFormat.PKCS8,NoEncryption))}")
+        self.secret=self.dh_private.exchange(load_pem(server_key))
+        derived_secret=dh_derive(self.secret)
+        print(base64.encodebytes(derived_secret))
+
 
     def _send(self, message: str) -> None:
         """
