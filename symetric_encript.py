@@ -11,6 +11,8 @@ from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat,PrivateFormat,ParameterFormat, load_pem_public_key, load_pem_parameters
 
+from Crypto.Cipher import Salsa20
+
 def deriveKey(password):
 	backend=default_backend()
 	salt = os.urandom(16)
@@ -32,8 +34,13 @@ def dh_derive(key):
 				backend=default_backend()
 	).derive(key)
 
-def encriptText(key, text, algorithm = 'AES'):
+	"""
+    										AES Session 
+    """
+									
+def encriptText(key, text, algorithm):
 	backend = default_backend()
+	iv = os.urandom(16)
 	if algorithm == "AES":
 		algo=algorithms.AES(key)
 	else:
@@ -44,19 +51,19 @@ def encriptText(key, text, algorithm = 'AES'):
 		missing_bytes = bs
 	padding = bytes([missing_bytes]*missing_bytes)
 	text+=padding
-	cipher = Cipher(algo, modes.ECB(), backend=backend)
+	cipher = Cipher(algo, modes.CBC(iv), backend=backend)
 	encryptor = cipher.encryptor()
 	ct = encryptor.update(text) + encryptor.finalize()
-	return ct
+	return ct,iv
 
-def decriptText(key, cryptogram, algorithm = 'AES'):
+def decriptText(key, cryptogram, algorithm, iv):
 	backend = default_backend()
 	if algorithm == "AES":
 		algo=algorithms.AES(key)
 	else:
 		raise(Exception("Invalid Algorithm"))
 
-	cipher = Cipher(algo, modes.ECB(), backend=backend)
+	cipher = Cipher(algo, modes.CBC(iv), backend=backend)
 	decryptor = cipher.decryptor()
 	text = decryptor.update(cryptogram) + decryptor.finalize()
 	p = text[-1]
@@ -88,6 +95,38 @@ def decriptFile(key,algorithm,fileIn,fileOut):
 			bts = f.read(256)
 	fout.close()
 	f.close()
+
+
+	"""
+    										Salsa20 Session 
+    """
+									
+def encryptTextSalsa20(key, text):
+	cipher = Salsa20.new(key=key)
+	ciphertext = cipher.nonce + cipher.encrypt(text)
+	return ciphertext
+
+def decryptTextSalsa20(key, ciphertext):
+	msg_end = ciphertext[:8]
+	msg_start = ciphertext[8:]
+	cipher = Salsa20.new(key=key, nonce=msg_end)
+	plaintext = cipher.decrypt(msg_start)
+	return plaintext
+
+	"""
+    										Algorithms Combination Session 
+    """
+									
+def encryptAesSalsa20(key_aes, keysalsa, text):
+	aes_cipher, iv = encriptText(key = key_aes, text=text, algorithm="AES")
+	salsa_cipher = encryptTextSalsa20(key=keysalsa, text=aes_cipher)
+	return salsa_cipher, iv
+
+def decryptAesSalsa20(key_aes, keysalsa, cipher, iv=None):
+	sansa_text = decryptTextSalsa20(key=keysalsa, ciphertext=cipher)
+	aes_text = decriptText(key=key_aes, cryptogram=sansa_text, algorithm="AES", iv=iv)
+	return aes_text
+
 
 def generateKey(pass_len = 16):
 	password = randomPassword(pass_len)
