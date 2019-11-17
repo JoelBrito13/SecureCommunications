@@ -2,13 +2,14 @@ import asyncio
 import json
 import sys
 import base64
-import pickle 
 import argparse
 import coloredlogs, logging
 import re
 import os
 from aio_tcpserver import tcp_server
 from symetric_encript import *
+#CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, get_mac, dh_derive, ENCODING_PUBLIC_KEY
+
 
 logger = logging.getLogger('root')
 
@@ -31,9 +32,8 @@ class ClientHandler(asyncio.Protocol):
 		self.file_name = None
 		self.file_path = None
 		self.storage_dir = storage_dir
-		self.buffer = 0
+		self.buffer = ''
 		self.peername = ''
-		self.sym_key = ''
 		self.dh_private = ''
 
 	def connection_made(self, transport) -> None:
@@ -48,6 +48,7 @@ class ClientHandler(asyncio.Protocol):
 		self.state = STATE_CONNECT
 
 
+
 	def data_received(self, data: bytes) -> None:
 		"""
         Called when data is received from the client.
@@ -57,36 +58,44 @@ class ClientHandler(asyncio.Protocol):
         """
 		logger.info('Received: {}'.format(data))
 		try:
-			message = pickle.loads(data)
-			self.buffer += sys.getsizeof(message)
+			self.buffer += data.decode()
 		except:
-			logger.exception("Could not decode JSON message: {}".format(message))
-			self.transport.close()
-			return
+			logger.exception('Could not decode data from client')
 
-		self.on_frame(message)  # Process the frame
-		
-		if self.buffer > 4096 * 1024 * 1024:  # If buffer is larger than 4M
+		idx = self.buffer.find('\r\n')
+
+		while idx >= 0:  # While there are separators
+			frame = self.buffer[:idx + 2].strip()  # Extract the JSON object
+			self.buffer = self.buffer[idx + 2:]  # Removes the JSON object from the buffer
+
+			self.on_frame(frame)  # Process the frame
+			idx = self.buffer.find('\r\n')
+
+		if len(self.buffer) > 4096 * 1024 * 1024:  # If buffer is larger than 4M
 			logger.warning('Buffer to large')
-			self.buffer = 0
+			self.buffer = ''
 			self.transport.close()
 
 
-	def on_frame(self, message: str) -> None:
+	def on_frame(self, frame: str) -> None:
 		"""
 		Called when a frame (JSON Object) is extracted
 		:param frame: The JSON object to process
 		:return:
 		"""
+		try:
+			message = json.loads(frame)
+		except:
+			logger.exception("Could not decode JSON message: {}".format(frame))
+			self.transport.close()
+			return
 
 		mtype = message['type'].upper()
 
-		if mtype == 'OPEN':
-			ret = self.process_open(message)
-		elif mtype == 'KEY':
-			ret = self.process_key(message)
-		elif mtype == 'DH':
+		if mtype == 'DH':
 			ret = self.process_dh(message)
+		elif mtype == 'OPEN':
+			ret = self.process_open(message)
 		elif mtype == 'DATA':
 			ret = self.process_data(message)
 		elif mtype == 'CLOSE':
@@ -125,9 +134,12 @@ class ClientHandler(asyncio.Protocol):
 		if not 'file_name' in message:
 			logger.warning("No filename in Open")
 			return False
-
+		cipher_name = base64.b64decode(message['file_name'])
+		b_name = self.cripto_algorithm.DecriptText(cipher_name)
+		
+		print("b_name: ",b_name)
 		# Only chars and letters in the filename
-		file_name = re.sub(r'[^\w\.]', '', message['file_name'])
+		file_name = re.sub(r'[^\w\.]', '', b_name.decode('ascii'))
 		file_path = os.path.join(self.storage_dir, file_name)
 		if not os.path.exists("files"):
 			try:
@@ -177,12 +189,12 @@ class ClientHandler(asyncio.Protocol):
 			if data is None:
 				logger.debug("Invalid message. No data found")
 				return False
-
-			c_text = message['data']
-			verification_mac=get_mac(self.sym_key,c_text,"SHA512")
+      
+			c_text = base64.b64decode(message['data'])
+  			verification_mac=self.cripto_algorithm.get_mac(cipher = bdata, algorithm = "SHA512")
 			if verification_mac == message['MAC']:
-				logger.debug("Valid MAC")
-				bdata = decriptText(key = self.sym_key, cryptogram = c_text)
+				logger.debug("Valid MAC")         
+			  bdata = self.cripto_algorithm.DecriptText(ciphertext = c_text)
 			else:
 				logger.exception("Invalid MAC")
 				return False
@@ -198,75 +210,38 @@ class ClientHandler(asyncio.Protocol):
 
 		return True
 
-
-	def process_key(self, message: str) -> bool:
-		"""
-		KEY EXCHANGE
-		"""
-		logger.info("Process Key: {}".format(message))
-
-		if self.state == STATE_OPEN:
-			self.state = STATE_DATA
-			# First Packet
-
-		elif self.state == STATE_DATA:
-			# Next packets
-			pass
-
-		else:
-			logger.warning("Invalid state. Discarding")
-			return False
-
-		try:
-			data = message['key']
-			if data is None:
-				logger.debug("Invalid message. No data found")
-				return False
-
-			self.sym_key = message['key']
-			print("New Key: ", self.sym_key)
-		except:
-			logger.exception("Could not decode base64 content from" + message['key'])
-			return False
-
-
-		self._send({'type': 'OK'})
-		return True
-
 	def process_dh(self,message: str) -> bool:
-		logger.info("Diffie Hellman Request: {}".format(message))
-
-		if self.state == STATE_OPEN:
-			self.state = STATE_DATA
-			# First Packet
-
-		elif self.state == STATE_DATA:
-			# Next packets
-			pass
-
-		else:
-			logger.warning("Invalid state. Discarding")
-			return False
+		logger.debug("Diffie Hellman Request: {}".format(message))
 
 		try:
-			client_public = load_pem(message['key'])
-			parameters = load_params(message['parameters'])
-			if client_public is None or parameters is None:
-				logger.debug("Invalid message. No data found")
+			client_public = load_pem(
+				base64.b64decode(message['key']))
+			parameters = load_params(
+				base64.b64decode(message['parameters']))
+	if client_public is None or parameters is None:
+				logger.error("Invalid message. No data found")
 				return False
 			# Generate server private
-			self.dh_private=dh_private(parameters)
+			self.dh_private = dh_private(parameters)
 			# Compute secret
-			secret=self.dh_private.exchange(client_public)
-			self.sym_key=dh_derive(secret)
+			secret = self.dh_private.exchange(client_public)
+			symetric_key = dh_derive(secret)
+			print("symetric_key",symetric_key)
+			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm="Salsa20")
+
 
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
 			return False
-
-		self._send({
-			'type': 'DH', 'key':self.dh_private.public_key().public_bytes(Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
-			})
+		message = {'type': 'DH', 'key':None}
+		message['key'] = base64.b64encode(
+			self.dh_private
+			.public_key()
+			.public_bytes(
+				Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
+		).decode()
+		
+		self._send(message)
 		return True
 
 	def process_close(self, message: str) -> bool:
@@ -284,7 +259,6 @@ class ClientHandler(asyncio.Protocol):
 			self.file = None
 
 		self.state = STATE_CLOSE
-
 		return True
 
 
@@ -294,9 +268,10 @@ class ClientHandler(asyncio.Protocol):
 		:param message:
 		:return:
 		"""
-		logger.debug("Send: {}".format(message))
+		logger.info("Send: {}".format(message))
 
-		message_b = pickle.dumps(message)
+		message_b = (json.dumps(message) + '\r\n').encode()
+		print(message_b)
 		self.transport.write(message_b)
 
 def main():

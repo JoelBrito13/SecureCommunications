@@ -7,6 +7,8 @@ import argparse
 import coloredlogs, logging
 import os
 from symetric_encript import *
+#CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, get_mac, dh_derive, ENCODING_PKC3, ENCODING_PUBLIC_KEY
+
 
 logger = logging.getLogger('root')
 
@@ -31,10 +33,8 @@ class ClientProtocol(asyncio.Protocol):
         self.file_name = file_name
         self.loop = loop
         self.state = STATE_CONNECT  # Initial State
-        self.buffer = 0  # Buffer to receive data chunks
-        self.key = None
-        self.sym_key= None
-        self.dh_private = ''
+        self.buffer = ''  # Buffer to receive data chunks
+        self.dh_private = ''        
 
     def connection_made(self, transport) -> None:
         """
@@ -45,11 +45,10 @@ class ClientProtocol(asyncio.Protocol):
         self.transport = transport
 
         logger.debug('Connected to Server')
-        
-        message = {'type': 'OPEN', 'file_name': self.file_name}
-        self._send(message)
-
         self.state = STATE_OPEN
+        self.dh_start()
+        while True:
+            pass
 
 
     def data_received(self, data: str) -> None:
@@ -59,38 +58,49 @@ class ClientProtocol(asyncio.Protocol):
         :param data: The data that was received. This may not be a complete JSON message
         :return:
         """
-        logger.debug('Received: {}'.format(data))
+        logger.info('Received: {}'.format(data))
         try:
-            message = pickle.loads(data)
-            self.buffer += sys.getsizeof(data)
+            self.buffer += data.decode()
         except:
-            logger.exception("Could not decode the message")
+            logger.exception('Could not decode data from client')
+
+        idx = self.buffer.find('\r\n')
+
+        while idx >= 0:  # While there are separators
+            frame = self.buffer[:idx + 2].strip()  # Extract the JSON object
+            self.buffer = self.buffer[idx + 2:]  # Removes the JSON object from the buffer
+
+            self.on_frame(frame)  # Process the frame
+            idx = self.buffer.find('\r\n')
+
+        if len(self.buffer) > 4096 * 1024 * 1024:  # If buffer is larger than 4M
+            logger.warning('Buffer to large')
+            self.buffer = ''
             self.transport.close()
-            return
 
-        self.on_frame(message)
-
-        if self.buffer > 4096 * 1024 * 1024:  # If buffer is larger than 4M
-            logger.warning('Buffer too large')
-            self.buffer = 0
-            self.transport.close()
-
-    def on_frame(self, message: str) -> None:
+    def on_frame(self, frame: str) -> None:
         """
         Processes a frame (JSON Object)
         :param frame: The JSON Object to process
         :return:
         """
 
-        #logger.debug("Frame: {}".format(frame))
+        logger.info("Frame: {}".format(frame))
+        try:
+            message = json.loads(frame)
+        except:
+            logger.exception("Could not decode the JSON message")
+            self.transport.close()
+            return
 
+        mtype = message.get('type', None)
 
         mtype = message['type']
 
         if mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
-                self.dh_start()
+                self.send_file(self.file_name)
             elif self.state == STATE_DATA:  # Got an OK during a message transfer.
                 # Reserved for future use
                 pass
@@ -98,10 +108,9 @@ class ClientProtocol(asyncio.Protocol):
                 logger.warning("Ignoring message from server")
             return
         elif mtype == 'ERROR':
-            logger.warning("Got error from server: {}".format(message['data']))
+            logger.warning("Got error from server: {}".format(message['message']))
         elif mtype == 'DH':
-            self.dh_finalize(message['key'])
-            self.send_file(self.file_name)
+            self.dh_finalize(message)
         else:
             logger.warning("Invalid message type")
 
@@ -130,10 +139,11 @@ class ClientProtocol(asyncio.Protocol):
             read_size = 16 * 60
             while True:
                 p_text = f.read(16 * 60)
-                print("SelfKey", self.sym_key, " text", p_text)
-                data = encriptText(key = self.sym_key, text = p_text)
-                message['data'] = data
-                
+                data = sa(key = self.sym_key, text = p_text)
+                message['data'] = base64.b64encode(
+                    self.cripto_algorithm.EncriptText(text=data)
+                    ).decode()
+    
                 message['MAC']=get_mac(self.sym_key,data,"SHA512")
                 print("DataLen, ",len(data))
                 self._send(message)
@@ -145,21 +155,47 @@ class ClientProtocol(asyncio.Protocol):
             self._send({'type': 'CLOSE'})
             logger.info("File transferred. Closing transport")
             self.transport.close()
+
+    def send_file_name(self):
+        file_name = self.cripto_algorithm.EncriptText(
+            text = bytes(self.file_name, 'ascii')
+        )
+        cipher_name = base64.b64encode(file_name).decode()
+
+        message = {'type': 'OPEN', 'file_name': cipher_name}
+        self._send(message)
     
     def dh_start(self):
+
+        message = {'type': 'DH', 'parameters': None,'key': None}
         parameters=dh_parameters()
         self.dh_private=dh_private(parameters)
         # TODO - change "key" naming
-        message = {
-            'type': 'DH',
-            'parameters': parameters.parameter_bytes(Encoding.PEM,ParameterFormat.PKCS3),
-            'key': self.dh_private.public_key().public_bytes(Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
-            }
+        
+        message['parameters'] =  base64.b64encode(
+            parameters.parameter_bytes(
+                Encoding.PEM,ParameterFormat.PKCS3)
+        ).decode()
+
+        message['key'] = base64.b64encode(
+            self.dh_private
+            .public_key()
+            .public_bytes(
+                Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
+        ).decode()
         self._send(message)
 
-    def dh_finalize(self,server_key):
+    def dh_finalize(self,message):
+        server_key = base64.b64decode(message['key'])
+
         secret=self.dh_private.exchange(load_pem(server_key))
-        self.sym_key=dh_derive(secret)
+        symetric_key=dh_derive(secret)
+        print("symetric_key",symetric_key)
+
+        self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm="Salsa20")
+
+        self.send_file_name()
+
 
     def _send(self, message: str) -> None:
         """
@@ -167,9 +203,8 @@ class ClientProtocol(asyncio.Protocol):
         :param message:
         :return:
         """
-        logger.debug("Send: {}".format(message))
-        print(message)
-        message_b = pickle.dumps(message)
+        logger.info("Send: {}".format(message))
+        message_b = (json.dumps(message) + '\r\n').encode()
         self.transport.write(message_b)
 
 def main():
