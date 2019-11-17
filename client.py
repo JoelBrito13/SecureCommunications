@@ -33,7 +33,7 @@ class ClientProtocol(asyncio.Protocol):
         self.state = STATE_CONNECT  # Initial State
         self.buffer = 0  # Buffer to receive data chunks
         self.key = None
-        self.secret= ''
+        self.sym_key= None
         self.dh_private = ''
 
     def connection_made(self, transport) -> None:
@@ -91,7 +91,6 @@ class ClientProtocol(asyncio.Protocol):
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
                 self.dh_start()
-                #self.send_file(self.file_name)
             elif self.state == STATE_DATA:  # Got an OK during a message transfer.
                 # Reserved for future use
                 pass
@@ -102,9 +101,9 @@ class ClientProtocol(asyncio.Protocol):
             logger.warning("Got error from server: {}".format(message['data']))
         elif mtype == 'DH':
             self.dh_finalize(message['key'])
+            self.send_file(self.file_name)
         else:
             logger.warning("Invalid message type")
-
 
         self.transport.close()
         self.loop.stop()
@@ -127,13 +126,15 @@ class ClientProtocol(asyncio.Protocol):
         """
 
         with open(file_name, 'rb') as f:
-            message = {'type': 'DATA', 'data': None}
+            message = {'type': 'DATA', 'data': None,'MAC': None}
             read_size = 16 * 60
             while True:
                 p_text = f.read(16 * 60)
-                print("SelfKey", self.key, " text", p_text)
-                data = encriptText(key = self.key, text = p_text)
+                print("SelfKey", self.sym_key, " text", p_text)
+                data = encriptText(key = self.sym_key, text = p_text)
                 message['data'] = data
+                
+                message['MAC']=get_mac(self.sym_key,data,"SHA512")
                 print("DataLen, ",len(data))
                 self._send(message)
                     
@@ -157,12 +158,8 @@ class ClientProtocol(asyncio.Protocol):
         self._send(message)
 
     def dh_finalize(self,server_key):
-
-        #print(f"Client Private: {base64.encodebytes(self.dh_private.private_bytes(Encoding.PEM,PrivateFormat.PKCS8,NoEncryption))}")
-        self.secret=self.dh_private.exchange(load_pem(server_key))
-        derived_secret=dh_derive(self.secret)
-        print(base64.encodebytes(derived_secret))
-
+        secret=self.dh_private.exchange(load_pem(server_key))
+        self.sym_key=dh_derive(secret)
 
     def _send(self, message: str) -> None:
         """

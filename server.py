@@ -33,9 +33,8 @@ class ClientHandler(asyncio.Protocol):
 		self.storage_dir = storage_dir
 		self.buffer = 0
 		self.peername = ''
-		self.aes_key = ''
+		self.sym_key = ''
 		self.dh_private = ''
-		self.secret = ''
 
 	def connection_made(self, transport) -> None:
 		"""
@@ -180,11 +179,16 @@ class ClientHandler(asyncio.Protocol):
 				return False
 
 			c_text = message['data']
-			bdata = decriptText(key = self.aes_key, cryptogram = c_text)
+			verification_mac=get_mac(self.sym_key,c_text,"SHA512")
+			if verification_mac == message['MAC']:
+				logger.debug("Valid MAC")
+				bdata = decriptText(key = self.sym_key, cryptogram = c_text)
+			else:
+				logger.exception("Invalid MAC")
+				return False
 		except:
 			logger.exception("Could not decode base64 content from message.data")
 			return False
-
 		try:
 			self.file.write(bdata)
 			self.file.flush()
@@ -219,8 +223,8 @@ class ClientHandler(asyncio.Protocol):
 				logger.debug("Invalid message. No data found")
 				return False
 
-			self.aes_key = message['key']
-			print("New Key: ", self.aes_key)
+			self.sym_key = message['key']
+			print("New Key: ", self.sym_key)
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
 			return False
@@ -245,23 +249,16 @@ class ClientHandler(asyncio.Protocol):
 			return False
 
 		try:
-			data = load_pem(message['key'])
-			params = load_params(message['parameters'])
-			if data is None or params is None:
+			client_public = load_pem(message['key'])
+			parameters = load_params(message['parameters'])
+			if client_public is None or parameters is None:
 				logger.debug("Invalid message. No data found")
 				return False
-			# Get clients public
-			client_public_p = data
-			parameters= params
 			# Generate server private
 			self.dh_private=dh_private(parameters)
 			# Compute secret
-			self.secret=self.dh_private.exchange(client_public_p)
-			print("Deriving")
-			derived_secret=dh_derive(self.secret)
-			print(base64.encodebytes(derived_secret))
-			
-			# Give servers public to client
+			secret=self.dh_private.exchange(client_public)
+			self.sym_key=dh_derive(secret)
 
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
