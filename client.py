@@ -76,6 +76,7 @@ class ClientProtocol(asyncio.Protocol):
         if len(self.buffer) > 4096 * 1024 * 1024:  # If buffer is larger than 4M
             logger.warning('Buffer to large')
             self.buffer = ''
+            self.state = STATE_CLOSE
             self.transport.close()
 
     def on_frame(self, frame: str) -> None:
@@ -96,8 +97,9 @@ class ClientProtocol(asyncio.Protocol):
         mtype = message.get('type', None)
 
         mtype = message['type']
-
-        if mtype == 'OK':  # Server replied OK. We can advance the state
+        if mtype == 'DH':
+            self.dh_finalize(message)
+        elif mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
                 self.send_file(self.file_name)
@@ -107,10 +109,9 @@ class ClientProtocol(asyncio.Protocol):
             else:
                 logger.warning("Ignoring message from server")
             return
+
         elif mtype == 'ERROR':
             logger.warning("Got error from server: {}".format(message['message']))
-        elif mtype == 'DH':
-            self.dh_finalize(message)
         else:
             logger.warning("Invalid message type")
 
@@ -133,18 +134,19 @@ class ClientProtocol(asyncio.Protocol):
         :param file_name: File to send
         :return:  None
         """
-
+        self.state = STATE_DATA
         with open(file_name, 'rb') as f:
             message = {'type': 'DATA', 'data': None,'MAC': None}
             read_size = 16 * 60
             while True:
-                p_text = f.read(16 * 60)
-                data = sa(key = self.sym_key, text = p_text)
-                message['data'] = base64.b64encode(
+                data = f.read(16 * 60)
+
+                chipher_data = base64.b64encode(
                     self.cripto_algorithm.EncriptText(text=data)
                     ).decode()
-    
-                message['MAC']=get_mac(self.sym_key,data,"SHA512")
+                message['data'] = chipher_data
+                message['MAC']=self.cripto_algorithm.get_mac(cipher = chipher_data, algorithm = "SHA512")
+                
                 print("DataLen, ",len(data))
                 self._send(message)
                     
@@ -183,11 +185,11 @@ class ClientProtocol(asyncio.Protocol):
             .public_bytes(
                 Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
         ).decode()
+
         self._send(message)
 
-    def dh_finalize(self,message):
+    def dh_finalize(self, message):
         server_key = base64.b64decode(message['key'])
-
         secret=self.dh_private.exchange(load_pem(server_key))
         symetric_key=dh_derive(secret)
         print("symetric_key",symetric_key)

@@ -8,7 +8,7 @@ import re
 import os
 from aio_tcpserver import tcp_server
 from symetric_encript import *
-#CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, get_mac, dh_derive, ENCODING_PUBLIC_KEY
+#CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, dh_derive, ENCODING_PUBLIC_KEY
 
 
 logger = logging.getLogger('root')
@@ -48,14 +48,13 @@ class ClientHandler(asyncio.Protocol):
 		self.state = STATE_CONNECT
 
 
-
 	def data_received(self, data: bytes) -> None:
 		"""
-        Called when data is received from the client.
-        Stores the data in the buffer
-        :param data: The data that was received. This may not be a complete JSON message
-        :return:
-        """
+		Called when data is received from the client.
+		Stores the data in the buffer
+		:param data: The data that was received. This may not be a complete JSON message
+		:return:
+		"""
 		logger.info('Received: {}'.format(data))
 		try:
 			self.buffer += data.decode()
@@ -189,12 +188,12 @@ class ClientHandler(asyncio.Protocol):
 			if data is None:
 				logger.debug("Invalid message. No data found")
 				return False
-      
+	  
 			c_text = base64.b64decode(message['data'])
-  			verification_mac=self.cripto_algorithm.get_mac(cipher = bdata, algorithm = "SHA512")
+			verification_mac=self.cripto_algorithm.get_mac(cipher = bdata, algorithm = "SHA512")
 			if verification_mac == message['MAC']:
 				logger.debug("Valid MAC")         
-			  bdata = self.cripto_algorithm.DecriptText(ciphertext = c_text)
+				bdata = self.cripto_algorithm.DecriptText(ciphertext = c_text)
 			else:
 				logger.exception("Invalid MAC")
 				return False
@@ -218,7 +217,8 @@ class ClientHandler(asyncio.Protocol):
 				base64.b64decode(message['key']))
 			parameters = load_params(
 				base64.b64decode(message['parameters']))
-	if client_public is None or parameters is None:
+			
+			if client_public is None or parameters is None:
 				logger.error("Invalid message. No data found")
 				return False
 			# Generate server private
