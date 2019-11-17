@@ -34,8 +34,7 @@ class ClientProtocol(asyncio.Protocol):
         self.loop = loop
         self.state = STATE_CONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
-        self.dh_private = ''
-        self.dh_private = ''
+        self.dh_private = ''        
 
     def connection_made(self, transport) -> None:
         """
@@ -115,7 +114,6 @@ class ClientProtocol(asyncio.Protocol):
         else:
             logger.warning("Invalid message type")
 
-
         self.transport.close()
         self.loop.stop()
 
@@ -145,7 +143,7 @@ class ClientProtocol(asyncio.Protocol):
                 message['data'] = base64.b64encode(
                     self.cripto_algorithm.EncriptText(text=data)
                     ).decode()
-                
+    
                 message['MAC']=get_mac(self.sym_key,data,"SHA512")
                 print("DataLen, ",len(data))
                 self._send(message)
@@ -197,6 +195,7 @@ class ClientProtocol(asyncio.Protocol):
         self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm="Salsa20")
 
         self.send_file_name()
+
 
     def _send(self, message: str) -> None:
         """

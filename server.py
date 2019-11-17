@@ -34,7 +34,6 @@ class ClientHandler(asyncio.Protocol):
 		self.storage_dir = storage_dir
 		self.buffer = ''
 		self.peername = ''
-		self.symetric_key = ''
 		self.dh_private = ''
 
 	def connection_made(self, transport) -> None:
@@ -190,14 +189,18 @@ class ClientHandler(asyncio.Protocol):
 			if data is None:
 				logger.debug("Invalid message. No data found")
 				return False
-
-			bdata = base64.b64decode(message['data'])
-			bdata = self.cripto_algorithm.DecriptText(ciphertext = c_text)
-
+      
+			c_text = base64.b64decode(message['data'])
+  			verification_mac=self.cripto_algorithm.get_mac(cipher = bdata, algorithm = "SHA512")
+			if verification_mac == message['MAC']:
+				logger.debug("Valid MAC")         
+			  bdata = self.cripto_algorithm.DecriptText(ciphertext = c_text)
+			else:
+				logger.exception("Invalid MAC")
+				return False
 		except:
 			logger.exception("Could not decode base64 content from message.data")
 			return False
-
 		try:
 			self.file.write(bdata)
 			self.file.flush()
@@ -215,9 +218,8 @@ class ClientHandler(asyncio.Protocol):
 				base64.b64decode(message['key']))
 			parameters = load_params(
 				base64.b64decode(message['parameters']))
-
-			if client_public is None or parameters is None:
-				logger.debug("Invalid message. No data found")
+	if client_public is None or parameters is None:
+				logger.error("Invalid message. No data found")
 				return False
 			# Generate server private
 			self.dh_private = dh_private(parameters)
@@ -226,6 +228,7 @@ class ClientHandler(asyncio.Protocol):
 			symetric_key = dh_derive(secret)
 			print("symetric_key",symetric_key)
 			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm="Salsa20")
+
 
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
@@ -256,7 +259,6 @@ class ClientHandler(asyncio.Protocol):
 			self.file = None
 
 		self.state = STATE_CLOSE
-
 		return True
 
 

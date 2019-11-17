@@ -6,7 +6,7 @@ import random
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes,hmac
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat,PrivateFormat,ParameterFormat, load_pem_public_key, load_pem_parameters
@@ -87,7 +87,23 @@ class CriptoAlgorithm():
 		cipher = Salsa20.new(key=self.key, nonce=msg_end)
 		plaintext = cipher.decrypt(msg_start)
 		return plaintext
+  
+  		"""
+	    										MAC Session 
+	    """
+  
+  def get_mac(cipher, algorithm):
+		backend = default_backend()
+		if algorithm == "SHA256":
+			algo=hashes.SHA256()
+		elif algorithm == "SHA512":
+			algo=hashes.SHA512()
+		else:
+			raise(Exception("Invalid Algorithm"))
+		mac=hmac.HMAC(self.key, algo, backend)
+		mac.update(cipher)
 
+		return mac.finalize()
 
 
 def deriveKey(password):
@@ -103,14 +119,6 @@ def deriveKey(password):
 	key = kdf.derive(password)
 	return salt,key
 
-def generateKey(pass_len = 16):
-	password = randomPassword(pass_len)
-	salt, key = deriveKey(bytes(password,"utf-8"))
-	return key
-
-def randomPassword(pass_len):
-	letters = string.ascii_letters + string.digits + string.punctuation
-	return ''.join(random.choice(letters) for letter in range(pass_len)) 
 
 def dh_derive(key):
 	return HKDF(algorithm=hashes.SHA256(),
