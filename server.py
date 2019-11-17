@@ -91,7 +91,7 @@ class ClientHandler(asyncio.Protocol):
 
 		mtype = message['type'].upper()
 
-		if mtype == 'DH':
+		if mtype == 'DH_REQ':
 			ret = self.process_dh(message)
 		elif mtype == 'OPEN':
 			ret = self.process_open(message)
@@ -136,7 +136,6 @@ class ClientHandler(asyncio.Protocol):
 		cipher_name = base64.b64decode(message['file_name'])
 		b_name = self.cripto_algorithm.DecriptText(cipher_name)
 		
-		print("b_name: ",b_name)
 		# Only chars and letters in the filename
 		file_name = re.sub(r'[^\w\.]', '', b_name.decode('ascii'))
 		file_path = os.path.join(self.storage_dir, file_name)
@@ -190,8 +189,12 @@ class ClientHandler(asyncio.Protocol):
 				return False
 	  
 			c_text = base64.b64decode(message['data'])
-			verification_mac=self.cripto_algorithm.get_mac(cipher = bdata, algorithm = "SHA512")
-			if verification_mac == message['MAC']:
+			client_mac = base64.b64decode(message['MAC'])
+
+			verification_mac = self.cripto_algorithm.get_mac(cipher = c_text, algorithm = "SHA512")
+			
+
+			if verification_mac == client_mac:
 				logger.debug("Valid MAC")         
 				bdata = self.cripto_algorithm.DecriptText(ciphertext = c_text)
 			else:
@@ -215,6 +218,7 @@ class ClientHandler(asyncio.Protocol):
 		try:
 			client_public = load_pem(
 				base64.b64decode(message['key']))
+			
 			parameters = load_params(
 				base64.b64decode(message['parameters']))
 			
@@ -226,14 +230,13 @@ class ClientHandler(asyncio.Protocol):
 			# Compute secret
 			secret = self.dh_private.exchange(client_public)
 			symetric_key = dh_derive(secret)
-			print("symetric_key",symetric_key)
 			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm="Salsa20")
 
 
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
 			return False
-		message = {'type': 'DH', 'key':None}
+		message = {'type': 'DH_REP', 'key':None}
 		message['key'] = base64.b64encode(
 			self.dh_private
 			.public_key()
@@ -271,7 +274,6 @@ class ClientHandler(asyncio.Protocol):
 		logger.info("Send: {}".format(message))
 
 		message_b = (json.dumps(message) + '\r\n').encode()
-		print(message_b)
 		self.transport.write(message_b)
 
 def main():

@@ -1,7 +1,6 @@
 import sys
 import asyncio
 import json
-import pickle 
 import base64
 import argparse
 import coloredlogs, logging
@@ -12,10 +11,11 @@ from symetric_encript import *
 
 logger = logging.getLogger('root')
 
-STATE_CONNECT = 0
-STATE_OPEN = 1
-STATE_DATA = 2
-STATE_CLOSE = 3
+STATE_DISCONNECT = 0 
+STATE_CONNECT = 1
+STATE_OPEN = 2
+STATE_DATA = 3
+STATE_CLOSE = 4
 
 
 class ClientProtocol(asyncio.Protocol):
@@ -32,9 +32,10 @@ class ClientProtocol(asyncio.Protocol):
 
         self.file_name = file_name
         self.loop = loop
-        self.state = STATE_CONNECT  # Initial State
+        self.state = STATE_DISCONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
-        self.dh_private = ''        
+        self.dh_private = ''   
+        self.tell = 0     
 
     def connection_made(self, transport) -> None:
         """
@@ -45,10 +46,8 @@ class ClientProtocol(asyncio.Protocol):
         self.transport = transport
 
         logger.debug('Connected to Server')
-        self.state = STATE_OPEN
+        self.state = STATE_CONNECT  
         self.dh_start()
-        while True:
-            pass
 
 
     def data_received(self, data: str) -> None:
@@ -72,11 +71,11 @@ class ClientProtocol(asyncio.Protocol):
 
             self.on_frame(frame)  # Process the frame
             idx = self.buffer.find('\r\n')
-
         if len(self.buffer) > 4096 * 1024 * 1024:  # If buffer is larger than 4M
             logger.warning('Buffer to large')
-            self.buffer = ''
+            self.buffer 
             self.state = STATE_CLOSE
+            self.buffer= ''
             self.transport.close()
 
     def on_frame(self, frame: str) -> None:
@@ -91,21 +90,26 @@ class ClientProtocol(asyncio.Protocol):
             message = json.loads(frame)
         except:
             logger.exception("Could not decode the JSON message")
+            
+            self.state = STATE_CLOSE
             self.transport.close()
             return
 
         mtype = message.get('type', None)
 
         mtype = message['type']
-        if mtype == 'DH':
+        if mtype == 'DH_REP':
             self.dh_finalize(message)
+            if self.state == STATE_CONNECT:
+                self.send_file_name()
+            elif self.state == STATE_OPEN:
+                logger.info("Channel reopen")
+                self.send_file(self.file_name)
+
         elif mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
                 self.send_file(self.file_name)
-            elif self.state == STATE_DATA:  # Got an OK during a message transfer.
-                # Reserved for future use
-                pass
             else:
                 logger.warning("Ignoring message from server")
             return
@@ -115,8 +119,10 @@ class ClientProtocol(asyncio.Protocol):
         else:
             logger.warning("Invalid message type")
 
-        self.transport.close()
-        self.loop.stop()
+        
+            self.state = STATE_CLOSE
+            self.transport.close()
+            self.loop.stop()
 
     def connection_lost(self, exc):
         """
@@ -134,29 +140,41 @@ class ClientProtocol(asyncio.Protocol):
         :param file_name: File to send
         :return:  None
         """
+        key_buffer = 0 
         self.state = STATE_DATA
+
         with open(file_name, 'rb') as f:
+
+            f.seek(self.tell)   #go to last read position
             message = {'type': 'DATA', 'data': None,'MAC': None}
             read_size = 16 * 60
             while True:
-                data = f.read(16 * 60)
+                data = f.read(16 * 60)              #960 bytes 
 
-                chipher_data = base64.b64encode(
-                    self.cripto_algorithm.EncriptText(text=data)
-                    ).decode()
-                message['data'] = chipher_data
-                message['MAC']=self.cripto_algorithm.get_mac(cipher = chipher_data, algorithm = "SHA512")
+                chipher_data = self.cripto_algorithm.EncriptText(text=data)
+                mac = self.cripto_algorithm.get_mac(cipher = chipher_data, algorithm = "SHA512")
                 
-                print("DataLen, ",len(data))
+                message['data'] = base64.b64encode(chipher_data).decode()
+                message['MAC'] = base64.b64encode(mac).decode()
+                
                 self._send(message)
                     
-                if len(p_text) != read_size:
-                    print(len(p_text))
+                if len(data) != read_size:
+                    break
+                key_buffer+=1
+                
+                if key_buffer == 5:                 #each 4800 bytes, the key will be changed
+                    self.state = STATE_OPEN
+                    self.tell = f.tell()
+                    self.dh_start()
                     break
 
-            self._send({'type': 'CLOSE'})
-            logger.info("File transferred. Closing transport")
-            self.transport.close()
+            if self.state == STATE_DATA:
+                self._send({'type': 'CLOSE'})
+                logger.info("File transferred. Closing transport")
+            
+                self.state = STATE_CLOSE
+                self.transport.close()
 
     def send_file_name(self):
         file_name = self.cripto_algorithm.EncriptText(
@@ -165,11 +183,12 @@ class ClientProtocol(asyncio.Protocol):
         cipher_name = base64.b64encode(file_name).decode()
 
         message = {'type': 'OPEN', 'file_name': cipher_name}
+        self.state = STATE_OPEN
         self._send(message)
+
     
     def dh_start(self):
-
-        message = {'type': 'DH', 'parameters': None,'key': None}
+        message = {'type': 'DH_REQ', 'parameters': None,'key': None}
         parameters=dh_parameters()
         self.dh_private=dh_private(parameters)
         # TODO - change "key" naming
@@ -192,11 +211,8 @@ class ClientProtocol(asyncio.Protocol):
         server_key = base64.b64decode(message['key'])
         secret=self.dh_private.exchange(load_pem(server_key))
         symetric_key=dh_derive(secret)
-        print("symetric_key",symetric_key)
 
         self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm="Salsa20")
-
-        self.send_file_name()
 
 
     def _send(self, message: str) -> None:
