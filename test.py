@@ -13,7 +13,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from asymetric_encript import rsa_key, rsa_encrypt, rsa_decrypt
-from symetric_encript import generateKey, encryptAesSalsa20, decryptAesSalsa20
+from symetric_encript import *
 
 while False:
 	priv,pub = rsa_key()
@@ -41,6 +41,9 @@ text = "Python random text to encryptor".encode('ascii'	)
 
 key1 = generateKey(32)
 key2 = generateKey(32)
+iv = os.urandom(16)
+
+cc=CriptoAlgorithm(key = key1, algorithm="AES", initial_vector=iv)
 
 message={'AES':key1, 'Salsa20':key2}
 print(message)
@@ -50,13 +53,11 @@ print(message)
 text = "Python random text to encryptor".encode('ascii'	)
 print(text)
 
-iv = os.urandom(16)
-crypto = encryptAesSalsa20(key1, key2,text, iv)
-
+crypto = cc.EncriptText(text)
 
 print("Cryptogram: {}\niv: {}".format(crypto, iv))
 
-text_d =decryptAesSalsa20(key1, key2, crypto, iv=iv)
+text_d = cc.DecriptText(crypto)
 print(text_d==text)
 print("Decrypt: {}".format(text_d))
 
