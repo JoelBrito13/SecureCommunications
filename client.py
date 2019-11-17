@@ -23,19 +23,19 @@ class ClientProtocol(asyncio.Protocol):
     Client that handles a single client
     """
 
-    def __init__(self, file_name, loop):
+    def __init__(self, file_name, loop, algorithm):
         """
         Default constructor
         :param file_name: Name of the file to send
         :param loop: Asyncio Loop to use
         """
-
         self.file_name = file_name
         self.loop = loop
         self.state = STATE_DISCONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
         self.dh_private = ''   
         self.tell = 0     
+        self.cripto_algorithm = CriptoAlgorithm(algorithm=algorithm[0])
 
     def connection_made(self, transport) -> None:
         """
@@ -57,7 +57,7 @@ class ClientProtocol(asyncio.Protocol):
         :param data: The data that was received. This may not be a complete JSON message
         :return:
         """
-        logger.info('Received: {}'.format(data))
+        logger.debug('Received: {}'.format(data))
         try:
             self.buffer += data.decode()
         except:
@@ -71,6 +71,7 @@ class ClientProtocol(asyncio.Protocol):
 
             self.on_frame(frame)  # Process the frame
             idx = self.buffer.find('\r\n')
+
         if len(self.buffer) > 4096 * 1024 * 1024:  # If buffer is larger than 4M
             logger.warning('Buffer to large')
             self.buffer 
@@ -85,7 +86,7 @@ class ClientProtocol(asyncio.Protocol):
         :return:
         """
 
-        logger.info("Frame: {}".format(frame))
+        logger.debug("Frame: {}".format(frame))
         try:
             message = json.loads(frame)
         except:
@@ -133,6 +134,40 @@ class ClientProtocol(asyncio.Protocol):
         logger.info('The server closed the connection')
         self.loop.stop()
 
+    def dh_start(self):
+        if self.cripto_algorithm.algorithm == "AES":
+            self.cripto_algorithm.initial_vector = os.urandom(16)
+            iv = base64.b64encode(self.cripto_algorithm.initial_vector).decode()
+            message = {'type': 'DH_REQ', 'parameters': None,'key': None, 'initial_vector': iv }
+        else:
+            message = {'type': 'DH_REQ', 'parameters': None,'key': None}
+    
+
+        parameters=dh_parameters()
+        self.dh_private=dh_private(parameters)
+        # TODO - change "key" naming
+        
+        message['parameters'] =  base64.b64encode(
+            parameters.parameter_bytes(
+                Encoding.PEM,ParameterFormat.PKCS3)
+        ).decode()
+
+        message['key'] = base64.b64encode(
+            self.dh_private
+            .public_key()
+            .public_bytes(
+                Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
+        ).decode()
+
+        self._send(message)
+
+    def dh_finalize(self, message):
+        server_key = base64.b64decode(message['key'])
+        secret=self.dh_private.exchange(load_pem(server_key))
+        symetric_key=dh_derive(secret)
+        self.cripto_algorithm.key = symetric_key
+
+
     def send_file(self, file_name: str) -> None:
         """
         Sends a file to the server.
@@ -163,7 +198,7 @@ class ClientProtocol(asyncio.Protocol):
                     break
                 key_buffer+=1
                 
-                if key_buffer == 5:                 #each 4800 bytes, the key will be changed
+                if key_buffer == 16:                 #each 15360 bytes, the key will be changed
                     self.state = STATE_OPEN
                     self.tell = f.tell()
                     self.dh_start()
@@ -187,41 +222,13 @@ class ClientProtocol(asyncio.Protocol):
         self._send(message)
 
     
-    def dh_start(self):
-        message = {'type': 'DH_REQ', 'parameters': None,'key': None}
-        parameters=dh_parameters()
-        self.dh_private=dh_private(parameters)
-        # TODO - change "key" naming
-        
-        message['parameters'] =  base64.b64encode(
-            parameters.parameter_bytes(
-                Encoding.PEM,ParameterFormat.PKCS3)
-        ).decode()
-
-        message['key'] = base64.b64encode(
-            self.dh_private
-            .public_key()
-            .public_bytes(
-                Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
-        ).decode()
-
-        self._send(message)
-
-    def dh_finalize(self, message):
-        server_key = base64.b64decode(message['key'])
-        secret=self.dh_private.exchange(load_pem(server_key))
-        symetric_key=dh_derive(secret)
-
-        self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm="Salsa20")
-
-
     def _send(self, message: str) -> None:
         """
         Effectively encodes and sends a message
         :param message:
         :return:
         """
-        logger.info("Send: {}".format(message))
+        logger.debug("Send: {}".format(message))
         message_b = (json.dumps(message) + '\r\n').encode()
         self.transport.write(message_b)
 
@@ -235,6 +242,9 @@ def main():
     parser.add_argument('-p', type=int, nargs=1,
                         dest='port', default=5000,
                         help='Server port (default=5000)')
+    parser.add_argument('-a', type=str, nargs=1,
+                        dest='algorithm', default='Salsa20',
+                        help='Algorithm options: Salsa20, AES (default=Salsa20)')
 
     parser.add_argument(type=str, dest='file_name', help='File to send')
 
@@ -243,14 +253,15 @@ def main():
     level = logging.DEBUG if args.verbose > 0 else logging.INFO
     port = args.port
     server = args.server
+    algorithm = args.algorithm
 
     coloredlogs.install(level)
     logger.setLevel(level)
 
-    logger.info("Sending file: {} to {}:{} LogLevel: {}".format(file_name, server, port, level))
+    logger.info("Sending file: {} to {}:{} Using {}, LogLevel: {}".format(file_name, server, port, algorithm, level))
 
     loop = asyncio.get_event_loop()
-    coro = loop.create_connection(lambda: ClientProtocol(file_name, loop),
+    coro = loop.create_connection(lambda: ClientProtocol(file_name, loop, algorithm),
                                   server, port)
     loop.run_until_complete(coro)
     loop.run_forever()

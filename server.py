@@ -55,7 +55,7 @@ class ClientHandler(asyncio.Protocol):
 		:param data: The data that was received. This may not be a complete JSON message
 		:return:
 		"""
-		logger.info('Received: {}'.format(data))
+		logger.debug('Received: {}'.format(data))
 		try:
 			self.buffer += data.decode()
 		except:
@@ -216,6 +216,13 @@ class ClientHandler(asyncio.Protocol):
 		logger.debug("Diffie Hellman Request: {}".format(message))
 
 		try:
+			if 'initial_vector' in message: 
+				iv = base64.b64decode(message['initial_vector'])
+				algorithm = "AES"
+			else:
+				iv = None
+				algorithm ="Salsa20"
+
 			client_public = load_pem(
 				base64.b64decode(message['key']))
 			
@@ -230,7 +237,7 @@ class ClientHandler(asyncio.Protocol):
 			# Compute secret
 			secret = self.dh_private.exchange(client_public)
 			symetric_key = dh_derive(secret)
-			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm="Salsa20")
+			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm=algorithm, initial_vector=iv)
 
 
 		except:
@@ -271,7 +278,7 @@ class ClientHandler(asyncio.Protocol):
 		:param message:
 		:return:
 		"""
-		logger.info("Send: {}".format(message))
+		logger.debug("Send: {}".format(message))
 
 		message_b = (json.dumps(message) + '\r\n').encode()
 		self.transport.write(message_b)

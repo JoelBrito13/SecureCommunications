@@ -12,8 +12,9 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat,PrivateFormat,ParameterFormat, load_pem_public_key, load_pem_parameters
 from Crypto.Cipher import Salsa20
 
-class CriptoAlgorithm():
-    def __init__(self, key, algorithm, initial_vector=None):
+
+class CriptoAlgorithm:
+    def __init__(self, algorithm, key=None, initial_vector=None):
         self.key=key
         self.algorithm=algorithm
         self.initial_vector=initial_vector
