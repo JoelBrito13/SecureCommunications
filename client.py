@@ -11,8 +11,8 @@ from symetric_encript import *
 
 logger = logging.getLogger('root')
 
-STATE_DISCONNECT = 0 
-STATE_CONNECT = 1
+STATE_CONNECT = 0
+STATE_DH = 1
 STATE_OPEN = 2
 STATE_DATA = 3
 STATE_CLOSE = 4
@@ -31,7 +31,7 @@ class ClientProtocol(asyncio.Protocol):
         """
         self.file_name = file_name
         self.loop = loop
-        self.state = STATE_DISCONNECT  # Initial State
+        self.state = STATE_CONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
         self.dh_private = ''   
         self.tell = 0     
@@ -43,6 +43,7 @@ class ClientProtocol(asyncio.Protocol):
         :param transport: The transport stream to use for this client
         :return: No return
         """
+        self.state = STATE_CONNECT
         self.transport = transport
 
         logger.debug('Connected to Server')
@@ -103,7 +104,7 @@ class ClientProtocol(asyncio.Protocol):
             self.dh_finalize(message)
             if self.state == STATE_CONNECT:
                 self.send_file_name()
-            elif self.state == STATE_OPEN:
+            elif self.state == STATE_DH:
                 logger.info("Channel reopen")
                 self.send_file(self.file_name)
 
@@ -158,7 +159,6 @@ class ClientProtocol(asyncio.Protocol):
             .public_bytes(
                 Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
         ).decode()
-
         self._send(message)
 
     def dh_finalize(self, message):
@@ -198,8 +198,8 @@ class ClientProtocol(asyncio.Protocol):
                     break
                 key_buffer+=1
                 
-                if key_buffer == 16:                 #each 15360 bytes, the key will be changed
-                    self.state = STATE_OPEN
+                if key_buffer == 16:                 #each 15.360 bytes, the key will be changed, or 15 kb
+                    self.state = STATE_DH
                     self.tell = f.tell()
                     self.dh_start()
                     break
@@ -212,6 +212,7 @@ class ClientProtocol(asyncio.Protocol):
                 self.transport.close()
 
     def send_file_name(self):
+        print("ALGO", self.cripto_algorithm.algorithm)
         file_name = self.cripto_algorithm.EncriptText(
             text = bytes(self.file_name, 'ascii')
         )
@@ -223,6 +224,8 @@ class ClientProtocol(asyncio.Protocol):
 
     
     def _send(self, message: str) -> None:
+        print(self.state)
+
         """
         Effectively encodes and sends a message
         :param message:
@@ -243,7 +246,7 @@ def main():
                         dest='port', default=5000,
                         help='Server port (default=5000)')
     parser.add_argument('-a', type=str, nargs=1,
-                        dest='algorithm', default='Salsa20',
+                        dest='algorithm', default=['Salsa20'],
                         help='Algorithm options: Salsa20, AES (default=Salsa20)')
 
     parser.add_argument(type=str, dest='file_name', help='File to send')

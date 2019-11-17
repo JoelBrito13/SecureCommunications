@@ -14,9 +14,10 @@ from symetric_encript import *
 logger = logging.getLogger('root')
 
 STATE_CONNECT = 0
-STATE_OPEN = 1
-STATE_DATA = 2
-STATE_CLOSE= 3
+STATE_DH = 1
+STATE_OPEN = 2
+STATE_DATA = 3
+STATE_CLOSE= 4
 
 #GLOBAL
 storage_dir = 'files'
@@ -27,7 +28,7 @@ class ClientHandler(asyncio.Protocol):
 		Default constructor
 		"""
 		self.signal = signal
-		self.state = 0
+		self.state = STATE_CONNECT
 		self.file = None
 		self.file_name = None
 		self.file_path = None
@@ -45,7 +46,7 @@ class ClientHandler(asyncio.Protocol):
 		self.peername = transport.get_extra_info('peername')
 		logger.info('\n\nConnection from {}'.format(self.peername))
 		self.transport = transport
-		self.state = STATE_CONNECT
+		self.state = STATE_DH
 
 
 	def data_received(self, data: bytes) -> None:
@@ -116,6 +117,48 @@ class ClientHandler(asyncio.Protocol):
 			self.state = STATE_CLOSE
 			self.transport.close()
 
+	def process_dh(self,message: str) -> bool:
+		logger.debug("Diffie Hellman Request: {}".format(message))
+
+		try:
+			if 'initial_vector' in message: 
+				iv = base64.b64decode(message['initial_vector'])
+				algorithm = "AES"
+			else:
+				iv = None
+				algorithm ="Salsa20"
+
+			client_public = load_pem(
+				base64.b64decode(message['key']))
+			
+			parameters = load_params(
+				base64.b64decode(message['parameters']))
+			
+			if client_public is None or parameters is None:
+				logger.error("Invalid message. No data found")
+				return False
+			# Generate server private
+			self.dh_private = dh_private(parameters)
+			# Compute secret
+			secret = self.dh_private.exchange(client_public)
+			symetric_key = dh_derive(secret)
+			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm=algorithm, initial_vector=iv)
+
+
+		except:
+			logger.exception("Could not decode base64 content from" + message['key'])
+			return False
+		message = {'type': 'DH_REP', 'key':None}
+		message['key'] = base64.b64encode(
+			self.dh_private
+			.public_key()
+			.public_bytes(
+				Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
+		).decode()
+
+		self._send(message)
+		return True
+
 
 	def process_open(self, message: str) -> bool:
 		"""
@@ -124,9 +167,9 @@ class ClientHandler(asyncio.Protocol):
 		:param message: The message to process
 		:return: Boolean indicating the success of the operation
 		"""
-		logger.debug("Process Open: {}".format(message))
+		logger.info("Process Open: {}".format(message))
 
-		if self.state != STATE_CONNECT:
+		if self.state != STATE_DH:
 			logger.warning("Invalid state. Discarding")
 			return False
 
@@ -168,19 +211,17 @@ class ClientHandler(asyncio.Protocol):
 		:param message: The message to process
 		:return: Boolean indicating the success of the operation
 		"""
-		logger.debug("Process Data: {}".format(message))
+		logger.info("Process Data: {}".format(message))
 
-		if self.state == STATE_OPEN:
-			self.state = STATE_DATA
-			# First Packet
-
-		elif self.state == STATE_DATA:
+		if self.state == STATE_OPEN  or self.state == STATE_DATA or self.state == STATE_DH:
 			# Next packets
 			pass
 
 		else:
 			logger.warning("Invalid state. Discarding")
 			return False
+
+		self.state = STATE_DATA
 
 		try:
 			data = message['data']
@@ -193,7 +234,6 @@ class ClientHandler(asyncio.Protocol):
 
 			verification_mac = self.cripto_algorithm.get_mac(cipher = c_text, algorithm = "SHA512")
 			
-
 			if verification_mac == client_mac:
 				logger.debug("Valid MAC")         
 				bdata = self.cripto_algorithm.DecriptText(ciphertext = c_text)
@@ -203,6 +243,7 @@ class ClientHandler(asyncio.Protocol):
 		except:
 			logger.exception("Could not decode base64 content from message.data")
 			return False
+
 		try:
 			self.file.write(bdata)
 			self.file.flush()
@@ -212,47 +253,6 @@ class ClientHandler(asyncio.Protocol):
 
 		return True
 
-	def process_dh(self,message: str) -> bool:
-		logger.debug("Diffie Hellman Request: {}".format(message))
-
-		try:
-			if 'initial_vector' in message: 
-				iv = base64.b64decode(message['initial_vector'])
-				algorithm = "AES"
-			else:
-				iv = None
-				algorithm ="Salsa20"
-
-			client_public = load_pem(
-				base64.b64decode(message['key']))
-			
-			parameters = load_params(
-				base64.b64decode(message['parameters']))
-			
-			if client_public is None or parameters is None:
-				logger.error("Invalid message. No data found")
-				return False
-			# Generate server private
-			self.dh_private = dh_private(parameters)
-			# Compute secret
-			secret = self.dh_private.exchange(client_public)
-			symetric_key = dh_derive(secret)
-			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm=algorithm, initial_vector=iv)
-
-
-		except:
-			logger.exception("Could not decode base64 content from" + message['key'])
-			return False
-		message = {'type': 'DH_REP', 'key':None}
-		message['key'] = base64.b64encode(
-			self.dh_private
-			.public_key()
-			.public_bytes(
-				Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
-		).decode()
-		
-		self._send(message)
-		return True
 
 	def process_close(self, message: str) -> bool:
 		"""
@@ -273,6 +273,7 @@ class ClientHandler(asyncio.Protocol):
 
 
 	def _send(self, message: str) -> None:
+		print(self.state)
 		"""
 		Effectively encodes and sends a message
 		:param message:
