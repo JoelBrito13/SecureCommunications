@@ -10,7 +10,6 @@ today=datetime.datetime.now()
 
 def build_issuers(chain,cert):
     chain.append(cert)
-
     issuer=cert.issuer
     subject=cert.subject
 
@@ -31,7 +30,7 @@ def load_cert(fname):
     return cert
 
 print("Loading roots")
-for f in os.scandir("/etc/ssl/certs"):
+for f in os.scandir("/resources"):
     try:
         cert=load_cert(f.path)
         if cert != None and today < cert.not_valid_after:
