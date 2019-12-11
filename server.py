@@ -8,6 +8,7 @@ import re
 import os
 from aio_tcpserver import tcp_server
 from symetric_encript import *
+from certificate import Validator
 #CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, dh_derive, ENCODING_PUBLIC_KEY
 
 
@@ -32,7 +33,10 @@ class ClientHandler(asyncio.Protocol):
 		self.file = None
 		self.file_name = None
 		self.file_path = None
+		self.validator = Validator()
 		self.storage_dir = storage_dir
+		self.resources_dir = os.path.join(os.getcwd(),"resources")
+		self.certificate_file = "SIO_Server.crt"
 		self.buffer = ''
 		self.peername = ''
 		self.dh_private = ''
@@ -94,6 +98,8 @@ class ClientHandler(asyncio.Protocol):
 
 		if mtype == 'DH_REQ':
 			ret = self.process_dh(message)
+		elif mtype == 'AUTHEN_REQ':
+			ret = self.send_certificate()
 		elif mtype == 'OPEN':
 			ret = self.process_open(message)
 		elif mtype == 'DATA':
@@ -152,14 +158,22 @@ class ClientHandler(asyncio.Protocol):
 		message['key'] = base64.b64encode(
 			self.dh_private
 			.public_key()
-			.public_bytes(
-				Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
-		).decode()
+			.public_bytes(Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)).decode()
 
 		self._send(message)
 		return True
 
-
+	def send_certificate(self):
+		cert = None
+		try:
+			fi = os.path.join(self.resources_dir,self.certificate_file)
+			cert = self.validator.load_cert_file(fi)
+		except:
+			print("Server certificate not found")
+			return False
+		message = {'type': 'AUTHEN_REP', 'cert': base64.b64encode(cert.public_bytes(Encoding.PEM)).decode()}
+		self._send(message)
+		
 	def process_open(self, message: str) -> bool:
 		"""
 		Processes an OPEN message from the client

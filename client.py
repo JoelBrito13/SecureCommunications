@@ -6,6 +6,7 @@ import argparse
 import coloredlogs, logging
 import os
 from symetric_encript import *
+from certificate import Validator
 #CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, get_mac, dh_derive, ENCODING_PKC3, ENCODING_PUBLIC_KEY
 
 
@@ -33,7 +34,8 @@ class ClientProtocol(asyncio.Protocol):
         self.loop = loop
         self.state = STATE_CONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
-        self.dh_private = ''   
+        self.dh_private = ''
+        self.validator = Validator()
         self.tell = 0     
         self.cripto_algorithm = CriptoAlgorithm(algorithm=algorithm[0])
 
@@ -47,8 +49,8 @@ class ClientProtocol(asyncio.Protocol):
         self.transport = transport
 
         logger.debug('Connected to Server')
-        self.state = STATE_CONNECT  
-        self.dh_start()
+        self.state = STATE_CONNECT
+        self.authentication_start()
 
 
     def data_received(self, data: str) -> None:
@@ -108,6 +110,9 @@ class ClientProtocol(asyncio.Protocol):
                 logger.info("Channel reopen")
                 self.send_file(self.file_name)
 
+        if mtype == "AUTHEN_REP":
+            self.authentication_verify(message)
+
         elif mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
@@ -134,6 +139,24 @@ class ClientProtocol(asyncio.Protocol):
         """
         logger.info('The server closed the connection')
         self.loop.stop()
+
+    def authentication_start(self):
+        message = {'type': 'AUTHEN_REQ', 'parameters': None}
+        self._send(message)
+
+    def authentication_verify(self,message):
+        decoded = base64.b64decode(message['cert'])
+        cert = self.validator.load_cert(decoded)
+        if self.validator.build_issuers([],cert):
+            logger.info("Server Authenticated")
+            self.login()
+        else:
+            logger.info("Server Authentication Failed")
+            return False
+
+    def login(self):
+        # TODO - Send claimed identity (username) and authentication type? (CC or password)
+        pass
 
     def dh_start(self):
         if self.cripto_algorithm.algorithm == "AES":
@@ -212,7 +235,6 @@ class ClientProtocol(asyncio.Protocol):
                 self.transport.close()
 
     def send_file_name(self):
-        print("ALGO", self.cripto_algorithm.algorithm)
         file_name = self.cripto_algorithm.EncriptText(
             text = bytes(self.file_name, 'ascii')
         )
@@ -224,8 +246,6 @@ class ClientProtocol(asyncio.Protocol):
 
     
     def _send(self, message: str) -> None:
-        print(self.state)
-
         """
         Effectively encodes and sends a message
         :param message:
