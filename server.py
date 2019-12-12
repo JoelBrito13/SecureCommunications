@@ -6,9 +6,12 @@ import argparse
 import coloredlogs, logging
 import re
 import os
+import uuid
 from aio_tcpserver import tcp_server
 from symetric_encript import *
+from asymetric_encript import *
 from certificate import Validator
+from cc import SmartCardAuthenticator
 #CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, dh_derive, ENCODING_PUBLIC_KEY
 
 
@@ -37,6 +40,10 @@ class ClientHandler(asyncio.Protocol):
 		self.storage_dir = storage_dir
 		self.resources_dir = os.path.join(os.getcwd(),"resources")
 		self.certificate_file = "SIO_Server.crt"
+		# Temporary
+		self.nonce=''
+		self.user_cert_file=''
+		###########
 		self.buffer = ''
 		self.peername = ''
 		self.dh_private = ''
@@ -98,8 +105,14 @@ class ClientHandler(asyncio.Protocol):
 
 		if mtype == 'DH_REQ':
 			ret = self.process_dh(message)
-		elif mtype == 'AUTHEN_REQ':
+		elif mtype == 'SERVER_AUTHEN_REQ':
 			ret = self.send_certificate()
+		elif mtype == 'CLIENT_AUTHEN_REQ':
+			ret = self.verify_client_certificate(message)
+		elif mtype == 'LOGIN':
+			ret = self.proccess_login(message)
+		elif mtype == 'CHALLENGE_REP':
+			ret = self.proccess_challenge(message)
 		elif mtype == 'OPEN':
 			ret = self.process_open(message)
 		elif mtype == 'DATA':
@@ -171,9 +184,48 @@ class ClientHandler(asyncio.Protocol):
 		except:
 			print("Server certificate not found")
 			return False
-		message = {'type': 'AUTHEN_REP', 'cert': base64.b64encode(cert.public_bytes(Encoding.PEM)).decode()}
+		message = {'type': 'SERVER_AUTHEN_REP', 'cert': base64.b64encode(cert.public_bytes(Encoding.PEM)).decode()}
 		self._send(message)
+		return True
 		
+	def proccess_login(self,message):
+		user = message['id']
+		with open(os.path.join(self.resources_dir,"users.csv"),"r") as users_file:
+			user_info=[l.split(",") for l in users_file if l.split(",")[0]==user][0]
+			# If user exists
+			if user_info:
+				# Temporary
+				self.nonce = "abcdefg"
+				self.user_cert_file=user_info[3]
+				message = {'type': 'CHALLENGE', 'nonce': self.nonce}
+				self._send(message)
+				return True
+		return False
+
+	def proccess_challenge(self,message):
+		signed_nonce = base64.b64decode(message['nonce'])
+		fname = os.path.join(self.resources_dir,self.user_cert_file)
+		user_cert=self.validator.load_cert_file(fname)
+		user_pk=user_cert.public_key()
+		try:
+			user_pk.verify(
+				signed_nonce,
+				bytes(self.nonce,'utf-8'),
+				padding.PKCS1v15(),
+				hashes.SHA1()
+			)
+			logger.info("User signature verified")
+			if self.validator.build_issuers([],user_cert):
+				logger.info(f"User certificate verified ({fname})")
+				logger.info("User Authenticated")
+				return True
+			else:
+				logger.info("Invalid user certificate")
+		except:
+			logger.info("Bad user signature")
+			return False
+		return False
+
 	def process_open(self, message: str) -> bool:
 		"""
 		Processes an OPEN message from the client
@@ -287,7 +339,6 @@ class ClientHandler(asyncio.Protocol):
 
 
 	def _send(self, message: str) -> None:
-		print(self.state)
 		"""
 		Effectively encodes and sends a message
 		:param message:

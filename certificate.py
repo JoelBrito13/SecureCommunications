@@ -15,10 +15,11 @@ class Validator:
         self.intermediates=self.load_intermediates()
 
     def build_issuers(self,chain,cert):
+        # Builds the certificate chain
         chain.append(cert)
         issuer=cert.issuer
         subject=cert.subject
-
+        
         if issuer == subject and subject in self.roots:
             return True
         if issuer in self.roots:
@@ -38,6 +39,7 @@ class Validator:
         return x509.load_pem_x509_certificate(cert, default_backend())
 
     def load_roots(self):
+        # Load trusted roots
         print("Loading roots")
         roots={}
         roots_dir=os.path.join(self.resource_dir,"roots")
@@ -51,6 +53,7 @@ class Validator:
         return roots
 
     def load_intermediates(self):
+        # Load any certificates that aren't the servers or clients
         print("Loading intermediates")
         intermediates={}
         intermediate_dir=os.path.join(self.resource_dir,"intermediates")

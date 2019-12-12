@@ -5,8 +5,10 @@ import base64
 import argparse
 import coloredlogs, logging
 import os
+import time
 from symetric_encript import *
 from certificate import Validator
+from cc import SmartCardAuthenticator
 #CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, get_mac, dh_derive, ENCODING_PKC3, ENCODING_PUBLIC_KEY
 
 
@@ -24,7 +26,7 @@ class ClientProtocol(asyncio.Protocol):
     Client that handles a single client
     """
 
-    def __init__(self, file_name, loop, algorithm):
+    def __init__(self, file_name, loop, algorithm,user):
         """
         Default constructor
         :param file_name: Name of the file to send
@@ -32,10 +34,12 @@ class ClientProtocol(asyncio.Protocol):
         """
         self.file_name = file_name
         self.loop = loop
+        self.user=user
         self.state = STATE_CONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
         self.dh_private = ''
         self.validator = Validator()
+        self.smartcart = SmartCardAuthenticator()
         self.tell = 0     
         self.cripto_algorithm = CriptoAlgorithm(algorithm=algorithm[0])
 
@@ -50,7 +54,7 @@ class ClientProtocol(asyncio.Protocol):
 
         logger.debug('Connected to Server')
         self.state = STATE_CONNECT
-        self.authentication_start()
+        self.server_authentication_start()
 
 
     def data_received(self, data: str) -> None:
@@ -109,10 +113,10 @@ class ClientProtocol(asyncio.Protocol):
             elif self.state == STATE_DH:
                 logger.info("Channel reopen")
                 self.send_file(self.file_name)
-
-        if mtype == "AUTHEN_REP":
-            self.authentication_verify(message)
-
+        elif mtype == "SERVER_AUTHEN_REP":
+            self.server_authentication_verify(message)
+        elif mtype == "CHALLENGE":
+            self.sign(message)
         elif mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_OPEN:
                 logger.info("Channel open")
@@ -140,11 +144,11 @@ class ClientProtocol(asyncio.Protocol):
         logger.info('The server closed the connection')
         self.loop.stop()
 
-    def authentication_start(self):
-        message = {'type': 'AUTHEN_REQ', 'parameters': None}
+    def server_authentication_start(self):
+        message = {'type': 'SERVER_AUTHEN_REQ', 'parameters': None}
         self._send(message)
 
-    def authentication_verify(self,message):
+    def server_authentication_verify(self,message):
         decoded = base64.b64decode(message['cert'])
         cert = self.validator.load_cert(decoded)
         if self.validator.build_issuers([],cert):
@@ -155,8 +159,24 @@ class ClientProtocol(asyncio.Protocol):
             return False
 
     def login(self):
-        # TODO - Send claimed identity (username) and authentication type? (CC or password)
-        pass
+        if not self.user:
+            user = input("Username: ")
+            message = {'type': 'LOGIN', 'id': user}
+        else:
+            message = {'type': 'LOGIN', 'id': self.user[0]}
+        self._send(message)
+
+    def sign(self,message):
+        nonce = message['nonce']
+        signed_nonce=self.smartcart.sign(nonce)
+        message = {'type':'CHALLENGE_REP','nonce':base64.b64encode(signed_nonce).decode()}
+        self._send(message)
+        return True
+
+    #def smartcard_authentication(self):
+        #cert = self.smartcart.get_user_certificate()
+        #message = {'type': 'CLIENT_AUTHEN_REQ', 'cert': base64.b64encode(cert.public_bytes(Encoding.PEM)).decode()}
+        #self._send(message)
 
     def dh_start(self):
         if self.cripto_algorithm.algorithm == "AES":
@@ -189,7 +209,6 @@ class ClientProtocol(asyncio.Protocol):
         secret=self.dh_private.exchange(load_pem(server_key))
         symetric_key=dh_derive(secret)
         self.cripto_algorithm.key = symetric_key
-
 
     def send_file(self, file_name: str) -> None:
         """
@@ -244,7 +263,6 @@ class ClientProtocol(asyncio.Protocol):
         self.state = STATE_OPEN
         self._send(message)
 
-    
     def _send(self, message: str) -> None:
         """
         Effectively encodes and sends a message
@@ -268,6 +286,9 @@ def main():
     parser.add_argument('-a', type=str, nargs=1,
                         dest='algorithm', default=['Salsa20'],
                         help='Algorithm options: Salsa20, AES (default=Salsa20)')
+    parser.add_argument('-u', type=str, nargs=1,
+                        dest='user', default=None,
+                        help='Username to use access the server')
 
     parser.add_argument(type=str, dest='file_name', help='File to send')
 
@@ -277,6 +298,7 @@ def main():
     port = args.port
     server = args.server
     algorithm = args.algorithm
+    user = args.user
 
     coloredlogs.install(level)
     logger.setLevel(level)
@@ -284,7 +306,7 @@ def main():
     logger.info("Sending file: {} to {}:{} Using {}, LogLevel: {}".format(file_name, server, port, algorithm, level))
 
     loop = asyncio.get_event_loop()
-    coro = loop.create_connection(lambda: ClientProtocol(file_name, loop, algorithm),
+    coro = loop.create_connection(lambda: ClientProtocol(file_name, loop, algorithm,user),
                                   server, port)
     loop.run_until_complete(coro)
     loop.run_forever()
