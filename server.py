@@ -188,11 +188,6 @@ class ClientHandler(asyncio.Protocol):
 		self._send(message)
 		return True
 		
-	def verify_client_certificate(self,message):
-		decoded = base64.b64decode(message['cert'])
-		cert = self.validator.load_cert(decoded)
-		return self.validator.build_issuers([],cert)
-
 	def proccess_login(self,message):
 		user = message['id']
 		with open(os.path.join(self.resources_dir,"users.csv"),"r") as users_file:
@@ -220,12 +215,16 @@ class ClientHandler(asyncio.Protocol):
 				hashes.SHA1()
 			)
 			logger.info("User signature verified")
-			return True
+			if self.validator.build_issuers([],user_cert):
+				logger.info(f"User certificate verified ({fname})")
+				logger.info("User Authenticated")
+				return True
+			else:
+				logger.info("Invalid user certificate")
 		except:
 			logger.info("Bad user signature")
 			return False
-
-		return True
+		return False
 
 	def process_open(self, message: str) -> bool:
 		"""
