@@ -1,0 +1,5 @@
+[
+	{"user_name":"pedro","role":"ADMIN", "password":"password1","cert":"pedrocert.pem", "data_used":0,"data_total":0},
+	{"user_name":"jean","role":"ADMIN", "password":"password1","cert":"jeancert.pem", "data_used":0,"data_total":100}
+]
+
