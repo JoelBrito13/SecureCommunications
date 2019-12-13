@@ -50,6 +50,7 @@ class ClientHandler(asyncio.Protocol):
 		self.peername = ''
 		self.cert = None
 
+
 	def connection_made(self, transport) -> None:
 		"""
 		Called when a client connects
@@ -136,6 +137,7 @@ class ClientHandler(asyncio.Protocol):
 			self.state = STATE_CLOSE
 			self.transport.close()
 
+
 	def process_key(self,message: str) -> bool:
 		try:
 			if 'initial_vector' in message: 
@@ -163,6 +165,7 @@ class ClientHandler(asyncio.Protocol):
 		self._send({'type': 'OK'})
 		return True
 
+
 	def send_certificate(self):
 		try:
 			fi = os.path.join(self.resources_dir,self.certificate_file)
@@ -174,19 +177,20 @@ class ClientHandler(asyncio.Protocol):
 		self._send(message)
 		return True
 		
+
 	def process_login(self,message):
 		user = message['data']
 		with open(os.path.join(self.resources_dir,"users.csv"),"r") as users_file:
 			user_info=[l.split(",") for l in users_file if l.split(",")[0]==user][0]
 			# If user exists
 			if user_info:
-				# Temporary
-				self.nonce = "abcdefg"
+				self.nonce = uuid.uuid4().bytes
 				self.user_cert_file=user_info[3]
-				message = {'type': 'CHALLENGE', 'nonce': self.nonce}
+				message = {'type': 'CHALLENGE', 'nonce': base64.b64encode(self.nonce).decode()}
 				self._send(message)
 				return True
 		return False
+
 
 	def process_challenge(self,message):
 		signed_nonce = base64.b64decode(message['nonce'])
@@ -196,7 +200,7 @@ class ClientHandler(asyncio.Protocol):
 		try:
 			user_pk.verify(
 				signed_nonce,
-				bytes(self.nonce,'utf-8'),
+				self.nonce,
 				padding.PKCS1v15(),
 				hashes.SHA1()
 			)
@@ -212,6 +216,7 @@ class ClientHandler(asyncio.Protocol):
 			logger.info("Bad user signature")
 			return False
 		return False
+
 
 	def process_open(self, message: str) -> bool:
 		"""

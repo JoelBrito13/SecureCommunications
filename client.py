@@ -175,7 +175,7 @@ class ClientProtocol(asyncio.Protocol):
         self._send(message)
 
     def proccess_challenge(self,message):
-        nonce = message['nonce']
+        nonce = base64.b64decode(message['nonce'])
         if self.auth_type == 'smartcard':
             signed_nonce=self.smartcart.sign(nonce)
             message = {'type':'CHALLENGE_REP','nonce':base64.b64encode(signed_nonce).decode()}
