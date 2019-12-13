@@ -11,6 +11,7 @@ from aio_tcpserver import tcp_server
 from symetric_encript import *
 from asymetric_encript import *
 from certificate import Validator
+from asymetric_encript import rsa_encrypt, rsa_decrypt
 from cc import SmartCardAuthenticator
 #CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, dh_derive, ENCODING_PUBLIC_KEY
 
@@ -46,7 +47,7 @@ class ClientHandler(asyncio.Protocol):
 		###########
 		self.buffer = ''
 		self.peername = ''
-		self.dh_private = ''
+		self.cert = None
 
 	def connection_made(self, transport) -> None:
 		"""
@@ -103,11 +104,11 @@ class ClientHandler(asyncio.Protocol):
 
 		mtype = message['type'].upper()
 
-		if mtype == 'DH_REQ':
-			ret = self.process_dh(message)
-		elif mtype == 'SERVER_AUTHEN_REQ':
+		if mtype == 'KEY_SEND':
+			ret = self.process_key(message)
+		elif mtype == 'SERVER_AUTH_REQ':
 			ret = self.send_certificate()
-		elif mtype == 'CLIENT_AUTHEN_REQ':
+		elif mtype == 'CLIENT_AUTH_REQ':
 			ret = self.verify_client_certificate(message)
 		elif mtype == 'LOGIN':
 			ret = self.proccess_login(message)
@@ -136,7 +137,7 @@ class ClientHandler(asyncio.Protocol):
 			self.state = STATE_CLOSE
 			self.transport.close()
 
-	def process_dh(self,message: str) -> bool:
+	def process_key(self,message: str) -> bool:
 		logger.debug("Diffie Hellman Request: {}".format(message))
 
 		try:
@@ -147,49 +148,35 @@ class ClientHandler(asyncio.Protocol):
 				iv = None
 				algorithm ="Salsa20"
 
-			client_public = load_pem(
-				base64.b64decode(message['key']))
-			
-			parameters = load_params(
-				base64.b64decode(message['parameters']))
-			
-			if client_public is None or parameters is None:
-				logger.error("Invalid message. No data found")
-				return False
-			# Generate server private
-			self.dh_private = dh_private(parameters)
+			client_key = base64.b64decode(message['key'])
+			symetric_key = rsa_decrypt(self.cert.private_key(), client_key)
+
 			# Compute secret
-			secret = self.dh_private.exchange(client_public)
-			symetric_key = dh_derive(secret)
 			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm=algorithm, initial_vector=iv)
 
 
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
+			self._send({'type':'ERROR', 'message': 'Could not decode base64 content from key'})
 			return False
-		message = {'type': 'DH_REP', 'key':None}
-		message['key'] = base64.b64encode(
-			self.dh_private
-			.public_key()
-			.public_bytes(Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)).decode()
 
-		self._send(message)
+		self._send({'type': 'OK'})
 		return True
 
 	def send_certificate(self):
 		cert = None
 		try:
 			fi = os.path.join(self.resources_dir,self.certificate_file)
-			cert = self.validator.load_cert_file(fi)
+			self.cert = self.validator.load_cert_file(fi)
 		except:
 			print("Server certificate not found")
 			return False
-		message = {'type': 'SERVER_AUTHEN_REP', 'cert': base64.b64encode(cert.public_bytes(Encoding.PEM)).decode()}
+		message = {'type': 'SERVER_AUTH_REP', 'data': base64.b64encode(self.cert.public_bytes(Encoding.PEM)).decode()}
 		self._send(message)
 		return True
 		
 	def proccess_login(self,message):
-		user = message['id']
+		user = message['data']
 		with open(os.path.join(self.resources_dir,"users.csv"),"r") as users_file:
 			user_info=[l.split(",") for l in users_file if l.split(",")[0]==user][0]
 			# If user exists
