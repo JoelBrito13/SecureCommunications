@@ -31,7 +31,7 @@ class ClientProtocol(asyncio.Protocol):
     Client that handles a single client
     """
 
-    def __init__(self, file_name, loop, algorithm,user):
+    def __init__(self, file_name, loop, algorithm,user,auth_type):
         """
         Default constructor
         :param file_name: Name of the file to send
@@ -40,6 +40,7 @@ class ClientProtocol(asyncio.Protocol):
         self.file_name = file_name
         self.loop = loop
         self.user=user
+        self.auth_type=auth_type
         self.state = STATE_CONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
         self.dh_private = ''
@@ -47,7 +48,7 @@ class ClientProtocol(asyncio.Protocol):
         self.smartcart = SmartCardAuthenticator()
         self.tell = 0     
         self.cripto_algorithm = CriptoAlgorithm(algorithm=algorithm[0])
-        self.cert = None
+        self.server_cert = None
 
     def connection_made(self, transport) -> None:
         """
@@ -120,15 +121,14 @@ class ClientProtocol(asyncio.Protocol):
         elif mtype == "SERVER_AUTH_REP":
             self.server_authentication_verify(message)
         elif mtype == "CHALLENGE":
-            self.sign(message)
+            self.proccess_challenge(message)
         elif mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_CHALLENGE:
                 self.send_key_generate()
             elif self.state == STATE_PRE_KEY:
                 logger.info("Channel open")
-                self.send_file(self.file_name)
                 self.send_file_name()
-            elif self.state == STATE_NEW_KEY:
+            elif self.state == STATE_OPEN:
                 self.send_file(self.file_name)
             else:
                 logger.warning("Ignoring message from server")
@@ -139,7 +139,6 @@ class ClientProtocol(asyncio.Protocol):
         else:
             logger.warning("Invalid message type")
 
-        
             self.state = STATE_CLOSE
             self.transport.close()
             self.loop.stop()
@@ -159,8 +158,8 @@ class ClientProtocol(asyncio.Protocol):
 
     def server_authentication_verify(self,message):
         decoded = base64.b64decode(message['data'])
-        self.cert = self.validator.load_cert(decoded)
-        if self.validator.build_issuers([],self.cert):
+        self.server_cert = self.validator.load_cert(decoded)
+        if self.validator.build_issuers([],self.server_cert):
             logger.info("Server Authenticated")
             self.login()
         else:
@@ -170,23 +169,23 @@ class ClientProtocol(asyncio.Protocol):
     def login(self):
         if not self.user:
             user = input("Username: ")
-            message = {'type': 'LOGIN', 'data': user}
+            message = {'type': 'LOGIN', 'data': user, 'auth_type': self.auth_type}
         else:
-            message = {'type': 'LOGIN', 'data': self.user[0]}
+            message = {'type': 'LOGIN', 'data': self.user[0], 'auth_type': self.auth_type}
         self._send(message)
 
-    def sign(self, message):
-        nonce = message['data']
-        signed_nonce=self.smartcart.sign(nonce)
-        message = {'type':'CHALLENGE_REP','data':base64.b64encode(signed_nonce).decode()}
-        self._send(message)
-        self.state = STATE_CHALLENGE
-        return True
-
-    #def smartcard_authentication(self):
-        #cert = self.smartcart.get_user_certificate()
-        #message = {'type': 'CLIENT_AUTH_REQ', 'cert': base64.b64encode(cert.public_bytes(Encoding.PEM)).decode()}
-        #self._send(message)
+    def proccess_challenge(self,message):
+        nonce = message['nonce']
+        if self.auth_type == 'smartcard':
+            signed_nonce=self.smartcart.sign(nonce)
+            message = {'type':'CHALLENGE_REP','nonce':base64.b64encode(signed_nonce).decode()}
+            self._send(message)
+            self.state =  STATE_CHALLENGE
+            return True
+        elif self.auth_type == 'password':
+            pass
+        else:
+            return False
 
     def send_key_generate(self):
         if self.cripto_algorithm.algorithm == "AES":
@@ -196,13 +195,12 @@ class ClientProtocol(asyncio.Protocol):
         else:
             message = {'type': 'KEY_SEND', 'key': None}
         key = self.cripto_algorithm.generate_key()
-        cripto_key = base64.b16decode(
-            rsa_encrypt(self.cert.public_key(), key)
-        ).decode()
+
+        cripto_key = rsa_encrypt(self.server_cert.public_key(), key)
         if  self.state != STATE_NEW_KEY:
             self.state = STATE_PRE_KEY
-        message['key'] = cripto_key
-        self.send_file(message)
+        message['key'] = base64.b64encode(cripto_key).decode()
+        self._send(message)
 
     def dh_start(self):
         if self.cripto_algorithm.algorithm == "AES":
@@ -314,6 +312,10 @@ def main():
     parser.add_argument('-u', type=str, nargs=1,
                         dest='user', default=None,
                         help='Username to use access the server')
+    group = parser.add_mutually_exclusive_group(required=True)
+    
+    group.add_argument('-password',dest='type',action='store_const',const='password')
+    group.add_argument('-smartcard',dest='type',action='store_const',const='smartcard')
 
     parser.add_argument(type=str, dest='file_name', help='File to send')
 
@@ -324,14 +326,14 @@ def main():
     server = args.server
     algorithm = args.algorithm
     user = args.user
-
+    authtype = args.type
     coloredlogs.install(level)
     logger.setLevel(level)
 
     logger.info("Sending file: {} to {}:{} Using {}, LogLevel: {}".format(file_name, server, port, algorithm, level))
 
     loop = asyncio.get_event_loop()
-    coro = loop.create_connection(lambda: ClientProtocol(file_name, loop, algorithm,user),
+    coro = loop.create_connection(lambda: ClientProtocol(file_name, loop, algorithm,user,authtype),
                                   server, port)
     loop.run_until_complete(coro)
     loop.run_forever()

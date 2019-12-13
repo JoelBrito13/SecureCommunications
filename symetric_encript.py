@@ -149,7 +149,6 @@ def dh_private(parameters):
 def load_pem(bmessage):
     return load_pem_public_key(bmessage, backend=default_backend())
 
-
 def load_params(bmessage):
     return load_pem_parameters(bmessage, backend=default_backend())
 

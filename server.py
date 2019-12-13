@@ -19,7 +19,7 @@ from cc import SmartCardAuthenticator
 logger = logging.getLogger('root')
 
 STATE_CONNECT = 0
-STATE_DH = 1
+STATE_READY = 1
 STATE_OPEN = 2
 STATE_DATA = 3
 STATE_CLOSE= 4
@@ -41,6 +41,7 @@ class ClientHandler(asyncio.Protocol):
 		self.storage_dir = storage_dir
 		self.resources_dir = os.path.join(os.getcwd(),"resources")
 		self.certificate_file = "SIO_Server.crt"
+		self.key_file = "SIO_Server_Key.pem"
 		# Temporary
 		self.nonce=''
 		self.user_cert_file=''
@@ -58,7 +59,7 @@ class ClientHandler(asyncio.Protocol):
 		self.peername = transport.get_extra_info('peername')
 		logger.info('\n\nConnection from {}'.format(self.peername))
 		self.transport = transport
-		self.state = STATE_DH
+		#self.state = STATE_DH
 
 
 	def data_received(self, data: bytes) -> None:
@@ -108,12 +109,10 @@ class ClientHandler(asyncio.Protocol):
 			ret = self.process_key(message)
 		elif mtype == 'SERVER_AUTH_REQ':
 			ret = self.send_certificate()
-		elif mtype == 'CLIENT_AUTH_REQ':
-			ret = self.verify_client_certificate(message)
 		elif mtype == 'LOGIN':
-			ret = self.proccess_login(message)
+			ret = self.process_login(message)
 		elif mtype == 'CHALLENGE_REP':
-			ret = self.proccess_challenge(message)
+			ret = self.process_challenge(message)
 		elif mtype == 'OPEN':
 			ret = self.process_open(message)
 		elif mtype == 'DATA':
@@ -138,8 +137,6 @@ class ClientHandler(asyncio.Protocol):
 			self.transport.close()
 
 	def process_key(self,message: str) -> bool:
-		logger.debug("Diffie Hellman Request: {}".format(message))
-
 		try:
 			if 'initial_vector' in message: 
 				iv = base64.b64decode(message['initial_vector'])
@@ -149,11 +146,14 @@ class ClientHandler(asyncio.Protocol):
 				algorithm ="Salsa20"
 
 			client_key = base64.b64decode(message['key'])
-			symetric_key = rsa_decrypt(self.cert.private_key(), client_key)
 
-			# Compute secret
+			# Access servers private key and decrypt secret
+			fname = os.path.join(self.resources_dir,"keys",self.key_file)
+			symetric_key = rsa_decrypt(rsa_private_file(fname,None), client_key)
+			
+
 			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm=algorithm, initial_vector=iv)
-
+			self.state = STATE_READY
 
 		except:
 			logger.exception("Could not decode base64 content from" + message['key'])
@@ -164,7 +164,6 @@ class ClientHandler(asyncio.Protocol):
 		return True
 
 	def send_certificate(self):
-		cert = None
 		try:
 			fi = os.path.join(self.resources_dir,self.certificate_file)
 			self.cert = self.validator.load_cert_file(fi)
@@ -175,7 +174,7 @@ class ClientHandler(asyncio.Protocol):
 		self._send(message)
 		return True
 		
-	def proccess_login(self,message):
+	def process_login(self,message):
 		user = message['data']
 		with open(os.path.join(self.resources_dir,"users.csv"),"r") as users_file:
 			user_info=[l.split(",") for l in users_file if l.split(",")[0]==user][0]
@@ -189,7 +188,7 @@ class ClientHandler(asyncio.Protocol):
 				return True
 		return False
 
-	def proccess_challenge(self,message):
+	def process_challenge(self,message):
 		signed_nonce = base64.b64decode(message['nonce'])
 		fname = os.path.join(self.resources_dir,self.user_cert_file)
 		user_cert=self.validator.load_cert_file(fname)
@@ -205,6 +204,7 @@ class ClientHandler(asyncio.Protocol):
 			if self.validator.build_issuers([],user_cert):
 				logger.info(f"User certificate verified ({fname})")
 				logger.info("User Authenticated")
+				self._send({'type': 'OK'})
 				return True
 			else:
 				logger.info("Invalid user certificate")
@@ -222,7 +222,7 @@ class ClientHandler(asyncio.Protocol):
 		"""
 		logger.info("Process Open: {}".format(message))
 
-		if self.state != STATE_DH:
+		if self.state != STATE_READY:
 			logger.warning("Invalid state. Discarding")
 			return False
 
@@ -266,7 +266,7 @@ class ClientHandler(asyncio.Protocol):
 		"""
 		logger.info("Process Data: {}".format(message))
 
-		if self.state == STATE_OPEN  or self.state == STATE_DATA or self.state == STATE_DH:
+		if self.state == STATE_OPEN  or self.state == STATE_DATA or self.state == STATE_READY:
 			# Next packets
 			pass
 

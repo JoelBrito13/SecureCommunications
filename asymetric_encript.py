@@ -10,6 +10,10 @@ def rsa_pk_file(fname):
         data = f.read()
     return serialization.load_pem_public_key(data, default_backend())
 
+def rsa_private_file(fname,password):
+    with open(fname, "rb") as f:
+        data = f.read()
+    return serialization.load_pem_private_key(data,password,default_backend())
 
 def rsa_encrypt(public_key, text):
     ciphertext = public_key.encrypt(
