@@ -17,14 +17,14 @@ from asymetric_encript import rsa_encrypt, rsa_decrypt
 logger = logging.getLogger('root')
 
 
-STATE_CONNECT = 0
-STATE_DH = 1
-STATE_OPEN = 2
-STATE_DATA = 3
-STATE_CLOSE = 4
-STATE_CHALLENGE = 5
-STATE_PRE_KEY = 6
-STATE_NEW_KEY = 7
+STATE_CONNECT   = 0
+STATE_LOGIN     = 1
+STATE_CHALLENGE = 2
+STATE_PRE_KEY   = 3
+STATE_OPEN      = 4
+STATE_DATA      = 5
+STATE_NEW_KEY   = 6
+STATE_CLOSE     = 7
 
 class ClientProtocol(asyncio.Protocol):
     """
@@ -43,7 +43,6 @@ class ClientProtocol(asyncio.Protocol):
         self.auth_type=auth_type
         self.state = STATE_CONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
-        self.dh_private = ''
         self.validator = Validator()
         self.smartcart = SmartCardAuthenticator()
         self.tell = 0     
@@ -111,28 +110,27 @@ class ClientProtocol(asyncio.Protocol):
             return
 
         mtype = message['type']
-        if mtype == 'DH_REP':
-            self.dh_finalize(message)
-            if self.state == STATE_CONNECT:
-                self.send_file_name()
-            elif self.state == STATE_DH:
-                logger.info("Channel reopen")
-                self.send_file(self.file_name)
-        elif mtype == "SERVER_AUTH_REP":
+        
+        if mtype == "SERVER_AUTH_REP":
+            logger.info("Requesting Certificate")
             self.server_authentication_verify(message)
         elif mtype == "CHALLENGE":
+            logger.info("Signing with key")
             self.proccess_challenge(message)
+        
         elif mtype == 'OK':  # Server replied OK. We can advance the state
             if self.state == STATE_CHALLENGE:
+                logger.info("Sending Key")
                 self.send_key_generate()
             elif self.state == STATE_PRE_KEY:
                 logger.info("Channel open")
                 self.send_file_name()
-            elif self.state == STATE_OPEN:
+
+            elif self.state in [ STATE_OPEN , STATE_NEW_KEY ] :
                 self.send_file(self.file_name)
             else:
                 logger.warning("Ignoring message from server")
-            return
+            return      
 
         elif mtype == 'ERROR':
             logger.warning("Got error from server: {}".format(message['message']))
@@ -153,10 +151,10 @@ class ClientProtocol(asyncio.Protocol):
         self.loop.stop()
 
     def server_authentication_start(self):
-        message = {'type': 'SERVER_AUTH_REQ', 'parameters': None}
+        message = {'type': 'SERVER_AUTH_REQ'}
         self._send(message)
 
-    def server_authentication_verify(self,message):
+    def server_authentication_verify(self, message):
         decoded = base64.b64decode(message['data'])
         self.server_cert = self.validator.load_cert(decoded)
         if self.validator.build_issuers([],self.server_cert):
@@ -172,6 +170,8 @@ class ClientProtocol(asyncio.Protocol):
             message = {'type': 'LOGIN', 'data': user, 'auth_type': self.auth_type}
         else:
             message = {'type': 'LOGIN', 'data': self.user[0], 'auth_type': self.auth_type}
+        
+        self.state = STATE_LOGIN
         self._send(message)
 
     def proccess_challenge(self,message):
@@ -187,6 +187,7 @@ class ClientProtocol(asyncio.Protocol):
         else:
             return False
 
+    
     def send_key_generate(self):
         if self.cripto_algorithm.algorithm == "AES":
             self.cripto_algorithm.initial_vector = os.urandom(16)
@@ -202,36 +203,6 @@ class ClientProtocol(asyncio.Protocol):
         message['key'] = base64.b64encode(cripto_key).decode()
         self._send(message)
 
-    def dh_start(self):
-        if self.cripto_algorithm.algorithm == "AES":
-            self.cripto_algorithm.initial_vector = os.urandom(16)
-            iv = base64.b64encode(self.cripto_algorithm.initial_vector).decode()
-            message = {'type': 'DH_REQ', 'parameters': None,'key': None, 'initial_vector': iv }
-        else:
-            message = {'type': 'DH_REQ', 'parameters': None,'key': None}
-
-        parameters=dh_parameters()
-        self.dh_private=dh_private(parameters)
-        # TODO - change "key" naming
-        
-        message['parameters'] =  base64.b64encode(
-            parameters.parameter_bytes(
-                Encoding.PEM,ParameterFormat.PKCS3)
-        ).decode()
-
-        message['key'] = base64.b64encode(
-            self.dh_private
-            .public_key()
-            .public_bytes(
-                Encoding.PEM,PublicFormat.SubjectPublicKeyInfo)
-        ).decode()
-        self._send(message)
-
-    def dh_finalize(self, message):
-        server_key = base64.b64decode(message['key'])
-        secret=self.dh_private.exchange(load_pem(server_key))
-        symetric_key=dh_derive(secret)
-        self.cripto_algorithm.key = symetric_key
 
     def send_file(self, file_name: str) -> None:
         """

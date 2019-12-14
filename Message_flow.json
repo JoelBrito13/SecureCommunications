@@ -1,0 +1,19 @@
+"Server Messages"
+
+{ 'type': 'SERVER_AUTH_REP', 'data': cert.pem }
+{ 'type': 'CHALLENGE', 'data': nonce }
+{ 'type': 'OK' }
+{ 'type': 'ERROR', 'message': 'See server' }
+
+
+"Client Messages"
+
+{ 'type': 'SERVER_AUTH_REQ' }
+{ 'type': 'LOGIN', 'data': user_name}
+{ 'type': 'CHALLENGE_REP', 'data': nonce}
+{ 'type': 'KEY_SEND', 'key': encripted_key, 'initial_vector': iv}
+{ 'type': 'OPEN', 'file_name': cipher_name }
+{ 'type': 'DATA', 'data': encripted_file_fragment , 'MAC': signature_cipher&key }
+{ 'type': 'CLOSE' }
+
+

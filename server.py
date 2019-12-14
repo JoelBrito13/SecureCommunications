@@ -13,16 +13,19 @@ from asymetric_encript import *
 from certificate import Validator
 from asymetric_encript import rsa_encrypt, rsa_decrypt
 from cc import SmartCardAuthenticator
-#CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, dh_derive, ENCODING_PUBLIC_KEY
+from users import User
 
 
 logger = logging.getLogger('root')
 
-STATE_CONNECT = 0
-STATE_READY = 1
-STATE_OPEN = 2
-STATE_DATA = 3
-STATE_CLOSE= 4
+STATE_CONNECT     = 0
+STATE_CERTIFICATE = 1
+STATE_LOGIN       = 2
+STATE_CHALLENGE   = 3
+STATE_READY       = 4
+STATE_OPEN        = 5
+STATE_DATA        = 6
+STATE_CLOSE       = 7
 
 #GLOBAL
 storage_dir = 'files'
@@ -33,10 +36,11 @@ class ClientHandler(asyncio.Protocol):
 		Default constructor
 		"""
 		self.signal = signal
-		self.state = STATE_CONNECT
 		self.file = None
+		self.state = None
 		self.file_name = None
 		self.file_path = None
+		self.user = None
 		self.validator = Validator()
 		self.storage_dir = storage_dir
 		self.resources_dir = os.path.join(os.getcwd(),"resources")
@@ -44,7 +48,6 @@ class ClientHandler(asyncio.Protocol):
 		self.key_file = "SIO_Server_Key.pem"
 		# Temporary
 		self.nonce=''
-		self.user_cert_file=''
 		###########
 		self.buffer = ''
 		self.peername = ''
@@ -60,7 +63,7 @@ class ClientHandler(asyncio.Protocol):
 		self.peername = transport.get_extra_info('peername')
 		logger.info('\n\nConnection from {}'.format(self.peername))
 		self.transport = transport
-		#self.state = STATE_DH
+		self.state = STATE_CONNECT
 
 
 	def data_received(self, data: bytes) -> None:
@@ -106,14 +109,15 @@ class ClientHandler(asyncio.Protocol):
 
 		mtype = message['type'].upper()
 
-		if mtype == 'KEY_SEND':
-			ret = self.process_key(message)
-		elif mtype == 'SERVER_AUTH_REQ':
+		
+		if mtype == 'SERVER_AUTH_REQ':
 			ret = self.send_certificate()
 		elif mtype == 'LOGIN':
 			ret = self.process_login(message)
 		elif mtype == 'CHALLENGE_REP':
 			ret = self.process_challenge(message)
+		elif mtype == 'KEY_SEND':
+			ret = self.process_key(message)
 		elif mtype == 'OPEN':
 			ret = self.process_open(message)
 		elif mtype == 'DATA':
@@ -138,7 +142,7 @@ class ClientHandler(asyncio.Protocol):
 			self.transport.close()
 
 
-	def process_key(self,message: str) -> bool:
+	def process_key(self, message: str) -> bool:
 		try:
 			if 'initial_vector' in message: 
 				iv = base64.b64decode(message['initial_vector'])
@@ -150,8 +154,8 @@ class ClientHandler(asyncio.Protocol):
 			client_key = base64.b64decode(message['key'])
 
 			# Access servers private key and decrypt secret
-			fname = os.path.join(self.resources_dir,"keys",self.key_file)
-			symetric_key = rsa_decrypt(rsa_private_file(fname,None), client_key)
+			fname = os.path.join(self.resources_dir, "keys", self.key_file)
+			symetric_key = rsa_decrypt(rsa_private_file(fname, None), client_key)
 			
 
 			self.cripto_algorithm = CriptoAlgorithm(key = symetric_key, algorithm=algorithm, initial_vector=iv)
@@ -174,27 +178,26 @@ class ClientHandler(asyncio.Protocol):
 			print("Server certificate not found")
 			return False
 		message = {'type': 'SERVER_AUTH_REP', 'data': base64.b64encode(self.cert.public_bytes(Encoding.PEM)).decode()}
+		self.state = STATE_CERTIFICATE
 		self._send(message)
 		return True
 		
 
 	def process_login(self,message):
-		user = message['data']
-		with open(os.path.join(self.resources_dir,"users.csv"),"r") as users_file:
-			user_info=[l.split(",") for l in users_file if l.split(",")[0]==user][0]
+		self.user =  User(message['data'], os.path.join(self.resources_dir,"users.json"))
 			# If user exists
-			if user_info:
-				self.nonce = uuid.uuid4().bytes
-				self.user_cert_file=user_info[3]
-				message = {'type': 'CHALLENGE', 'nonce': base64.b64encode(self.nonce).decode()}
-				self._send(message)
-				return True
+		if self.user.is_valid():
+			self.nonce = uuid.uuid4().bytes
+			message = {'type': 'CHALLENGE', 'nonce': base64.b64encode(self.nonce).decode()}
+			self._send(message)
+			self.state = STATE_LOGIN
+			return True
 		return False
 
 
 	def process_challenge(self,message):
 		signed_nonce = base64.b64decode(message['nonce'])
-		fname = os.path.join(self.resources_dir,self.user_cert_file)
+		fname = os.path.join(self.resources_dir, self.user.user['cert'])
 		user_cert=self.validator.load_cert_file(fname)
 		user_pk=user_cert.public_key()
 		try:
@@ -209,6 +212,7 @@ class ClientHandler(asyncio.Protocol):
 				logger.info(f"User certificate verified ({fname})")
 				logger.info("User Authenticated")
 				self._send({'type': 'OK'})
+				self.state = STATE_CHALLENGE
 				return True
 			else:
 				logger.info("Invalid user certificate")
@@ -238,8 +242,8 @@ class ClientHandler(asyncio.Protocol):
 		b_name = self.cripto_algorithm.DecriptText(cipher_name)
 		
 		# Only chars and letters in the filename
-		file_name = re.sub(r'[^\w\.]', '', b_name.decode('ascii'))
-		file_path = os.path.join(self.storage_dir, file_name)
+		self.file_name = re.sub(r'[^\w\.]', '', b_name.decode('ascii'))
+		file_path = os.path.join(self.storage_dir, self.file_name)
 		if not os.path.exists("files"):
 			try:
 				os.mkdir("files")
@@ -256,7 +260,6 @@ class ClientHandler(asyncio.Protocol):
 
 		self._send({'type': 'OK'})
 
-		self.file_name = file_name
 		self.file_path = file_path
 		self.state = STATE_OPEN
 		return True
@@ -298,10 +301,15 @@ class ClientHandler(asyncio.Protocol):
 			else:
 				logger.exception("Invalid MAC")
 				return False
+
+
 		except:
 			logger.exception("Could not decode base64 content from message.data")
 			return False
 
+		if not self.user.add_disk():
+			self.delete_file()
+			return False
 		try:
 			self.file.write(bdata)
 			self.file.flush()
@@ -310,6 +318,14 @@ class ClientHandler(asyncio.Protocol):
 			return False
 
 		return True
+
+	def delete_file(self):
+		message = {'type': 'ERROR', 'message': 'Limit of {} KBs reached'.format(self.user.user["data_total"])}
+		logger.info(message)
+		self.process_close(message)
+		stat = os.stat(self.file_name)
+		self.user.remove_disk(int(stat.st_size / 1024))
+		open(self.file_name, "w").close()			#erase data
 
 
 	def process_close(self, message: str) -> bool:
@@ -327,6 +343,7 @@ class ClientHandler(asyncio.Protocol):
 			self.file = None
 
 		self.state = STATE_CLOSE
+		self.user.update()
 		return True
 
 
