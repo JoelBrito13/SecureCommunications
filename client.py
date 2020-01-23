@@ -6,10 +6,11 @@ import argparse
 import coloredlogs, logging
 import os
 import time
+import uuid
 from symetric_encript import *
 from certificate import Validator
 from cc import SmartCardAuthenticator
-from asymetric_encript import rsa_encrypt, rsa_decrypt
+from asymetric_encript import rsa_encrypt, rsa_decrypt, rsa_verify_sign
 
 #CriptoAlgorithm, dh_parameters, dh_private, load_pem, load_params, get_mac, dh_derive, ENCODING_PKC3, ENCODING_PUBLIC_KEY
 
@@ -43,6 +44,7 @@ class ClientProtocol(asyncio.Protocol):
         self.auth_type=auth_type
         self.state = STATE_CONNECT  # Initial State
         self.buffer = ''  # Buffer to receive data chunks
+        self.nonce = ''
         self.validator = Validator()
         self.smartcart = SmartCardAuthenticator()
         self.tell = 0     
@@ -151,13 +153,16 @@ class ClientProtocol(asyncio.Protocol):
         self.loop.stop()
 
     def server_authentication_start(self):
-        message = {'type': 'SERVER_AUTH_REQ'}
+        self.nonce = uuid.uuid4().bytes
+        message = {'type': 'SERVER_AUTH_REQ', 'nonce': base64.b64encode(self.nonce).decode()}
         self._send(message)
 
     def server_authentication_verify(self, message):
-        decoded = base64.b64decode(message['data'])
-        self.server_cert = self.validator.load_cert(decoded)
-        if self.validator.build_issuers([],self.server_cert):
+        decoded_certificate = base64.b64decode(message['data'])
+        signed_nonce = base64.b64decode(message['nonce'])
+        self.server_cert = self.validator.load_cert(decoded_certificate)
+        # Verify certificate and signed nonce
+        if self.validator.build_issuers([],self.server_cert) and rsa_verify_sign(self.server_cert.public_key(),signed_nonce,self.nonce):
             logger.info("Server Authenticated")
             self.login()
         else:
@@ -178,12 +183,21 @@ class ClientProtocol(asyncio.Protocol):
         nonce = base64.b64decode(message['nonce'])
         if self.auth_type == 'smartcard':
             signed_nonce=self.smartcart.sign(nonce)
-            message = {'type':'CHALLENGE_REP','nonce':base64.b64encode(signed_nonce).decode()}
+            message = {'type':'CHALLENGE_REP','nonce':base64.b64encode(signed_nonce).decode(), 'auth': 'smartcard'}
             self._send(message)
             self.state =  STATE_CHALLENGE
             return True
         elif self.auth_type == 'password':
-            pass
+            password = input("Password: ")
+            salt = os.urandom(16)
+            # First password transformation (server also stores hashed password)
+                # ...
+            # Second password transformation, concatenation (hashed_password + nonce)
+            final=self.cripto_algorithm.derive_key(bytes(password,'utf-8')+nonce,salt)
+            message = {'type':'CHALLENGE_REP','nonce':base64.b64encode(final).decode(), 'auth': 'password', 'salt': base64.b64encode(salt).decode()}
+            self._send(message)
+            self.state =  STATE_CHALLENGE
+            return True
         else:
             return False
 

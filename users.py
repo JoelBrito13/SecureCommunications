@@ -4,18 +4,20 @@ import json
 class User:
     def __init__(self, user_name, file="resources/users.json"):
         self.file = file
-        self.key = ''
+        self.user = ''
         with open(file, 'r') as users_file:
             self.data = json.load(users_file)
-            for key in self.data.keys():
-                if self.data[key]["user_name"] == user_name:
-                    self.key = key
-                    self.user = self.data[key]
+            for user in self.data:
+                if user["user_name"] == user_name:
+                    self.user = user
 
     def update(self):
-        self.data[self.key] = self.user
+        for u in self.data:
+            if u == self.user: 
+                u = self.user
         with open(self.file, 'w') as file:
             json.dump(self.data, file)
+            print("Updated")
 
     def add_disk(self, amount=1):
         self.user["data_used"] += amount
@@ -29,4 +31,4 @@ class User:
         self.user["data_used"] -= amount
 
     def is_valid(self):
-        return self.key != ''
+        return self.user != ''

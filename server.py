@@ -111,11 +111,18 @@ class ClientHandler(asyncio.Protocol):
 
 		
 		if mtype == 'SERVER_AUTH_REQ':
-			ret = self.send_certificate()
+			ret = self.send_certificate(message)
 		elif mtype == 'LOGIN':
 			ret = self.process_login(message)
 		elif mtype == 'CHALLENGE_REP':
-			ret = self.process_challenge(message)
+			if message['auth'] == 'smartcard':
+				logger.info("Smartcard Authentication")
+				ret = self.process_challenge_smartcard(message)
+			elif message['auth'] == 'password':
+				logger.info("Password Authentication")
+				ret = self.process_challenge_password(message)
+			else:
+				logger.warning("Invalid authentication type")
 		elif mtype == 'KEY_SEND':
 			ret = self.process_key(message)
 		elif mtype == 'OPEN':
@@ -170,14 +177,16 @@ class ClientHandler(asyncio.Protocol):
 		return True
 
 
-	def send_certificate(self):
+	def send_certificate(self,message):
 		try:
 			fi = os.path.join(self.resources_dir,self.certificate_file)
 			self.cert = self.validator.load_cert_file(fi)
 		except:
 			print("Server certificate not found")
 			return False
-		message = {'type': 'SERVER_AUTH_REP', 'data': base64.b64encode(self.cert.public_bytes(Encoding.PEM)).decode()}
+		nonce = base64.b64decode(message['nonce'])
+		key = rsa_private_file(os.path.join(self.resources_dir,'keys',self.key_file),None)
+		message = {'type': 'SERVER_AUTH_REP', 'nonce': base64.b64encode(rsa_sign(key,nonce)).decode(),'data': base64.b64encode(self.cert.public_bytes(Encoding.PEM)).decode()}
 		self.state = STATE_CERTIFICATE
 		self._send(message)
 		return True
@@ -195,7 +204,7 @@ class ClientHandler(asyncio.Protocol):
 		return False
 
 
-	def process_challenge(self,message):
+	def process_challenge_smartcard(self,message):
 		signed_nonce = base64.b64decode(message['nonce'])
 		fname = os.path.join(self.resources_dir, self.user.user['cert'])
 		user_cert=self.validator.load_cert_file(fname)
@@ -220,6 +229,20 @@ class ClientHandler(asyncio.Protocol):
 			logger.info("Bad user signature")
 			return False
 		return False
+
+	def process_challenge_password(self,message):
+		transformed_nonce = base64.b64decode(message['nonce'])
+		salt = base64.b64decode(message['salt'])
+		password=bytes(self.user.user['password'],'utf-8')
+		expected_value=password+self.nonce
+		if verify_key(expected_value,transformed_nonce,salt):
+			logger.info("User Authenticated")
+			self._send({'type': 'OK'})
+			self.state = STATE_CHALLENGE
+			return True
+		else:
+			logger.info("Invalid Credentials")
+			return False
 
 
 	def process_open(self, message: str) -> bool:

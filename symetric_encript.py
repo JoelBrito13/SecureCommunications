@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, PrivateFormat, ParameterFormat, \
     load_pem_public_key, load_pem_parameters
 from Crypto.Cipher import Salsa20
+from cryptography.exceptions import InvalidKey
 
 
 class CriptoAlgorithm:
@@ -105,7 +106,7 @@ class CriptoAlgorithm:
 
     def generate_key(self, pass_len=64):
         password = self.random_password(pass_len)
-        self.key = self.derive_key(bytes(password, "utf-8"))
+        self.key = self.derive_key(bytes(password, "utf-8"),os.urandom(16))
         return self.key
 
     @staticmethod
@@ -114,18 +115,17 @@ class CriptoAlgorithm:
         return ''.join(random.choice(letters) for letter in range(pass_len))
 
     @staticmethod
-    def derive_key(password):
+    def derive_key(password,salt):
         backend = default_backend()
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=os.urandom(16),
+            salt=salt,
             iterations=100000,
             backend=backend
         )
         return kdf.derive(password)
-
-
+    
 
 def dh_derive(key):
     return HKDF(algorithm=hashes.SHA256(),
@@ -164,3 +164,18 @@ def get_mac(key, message, algorithm):
     mac = hmac.HMAC(key, algo, backend)
     mac.update(message)
     return mac.finalize()
+
+def verify_key(message,key,salt):
+    backend = default_backend()
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+        backend=backend
+    )
+    try:
+        kdf.verify(message,key)
+        return True
+    except InvalidKey:
+        return False
